@@ -1,0 +1,195 @@
+    document.getElementById('kpiIncome').textContent = won(income);
+    document.getElementById('kpiExpense').textContent = won(expense);
+    document.getElementById('kpiSaving').textContent = won(saving);
+    document.getElementById('kpiInvest').textContent = won(invest);
+    document.getElementById('kpiNet').textContent = won(net);
+
+    renderRatioSection();
+    renderExpenseSection();
+    renderAllowanceSection();
+    try { renderSpendDetail_(); } catch (e) { console.error('분류별 지출 오류', e); }
+    renderTable(rows);
+
+    document.getElementById('rangeHint').textContent = rows.length + '건 표시 중';
+  }
+
+  // ---------- 탭2: 정훈 용돈 내역 (월별 × 내역) ----------
+  function renderAllowanceSection() {
+    var from = state.allowance.from;
+    var to = state.allowance.to;
+    var listEl = document.getElementById('allowanceList');
+    var empty = document.getElementById('allowanceEmpty');
+    if (!listEl) return;
+
+    var rows = state.rows.map(parseRow).filter(function (r) {
+      if (!(r.type === '지출' && r.main === '용돈' && r.sub === '정훈용돈')) return false;
+      if (from && r.yearMonth < from) return false;
+      if (to && r.yearMonth > to) return false;
+      return true;
+    });
+    if (!rows.length) { listEl.innerHTML = ''; empty.style.display = 'block'; return; }
+    empty.style.display = 'none';
+
+    var byMonth = {};
+    rows.forEach(function (r) { (byMonth[r.yearMonth] = byMonth[r.yearMonth] || []).push(r); });
+    var months = Object.keys(byMonth).sort().reverse();
+    if (!state.allowance.open) state.allowance.open = {};
+    var anyOpen = months.some(function (m) { return state.allowance.open[m]; });
+    var totals = months.map(function (m) { return byMonth[m].reduce(function (s, r) { return s + r.applied; }, 0); });
+    var maxTotal = Math.max.apply(null, totals.concat([1]));
+
+    function esc(v) { return String(v === undefined || v === null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+    listEl.innerHTML = months.map(function (m, i) {
+      var items = byMonth[m].slice().sort(function (x, y) { return String(y.date) < String(x.date) ? -1 : (String(y.date) > String(x.date) ? 1 : 0); });
+      var open = anyOpen ? !!state.allowance.open[m] : i === 0;
+      var p = m.split('.');
+      var label = p.length > 1 ? (p[0] + '년 ' + parseInt(p[1], 10) + '월') : m;
+      return '<details class="al-month" data-month="' + m + '"' + (open ? ' open' : '') + '>' +
+        '<summary><span class="al-m">' + label + '</span><span class="al-cnt">' + items.length + '건</span><span class="al-total">' + won(totals[i]) + '</span>' +
+        '<span class="al-bar"><span style="width:' + (totals[i] / maxTotal * 100) + '%"></span></span></summary>' +
+        '<ul class="al-items">' + items.map(function (r) {
+          var d = String(r.date || '').slice(5, 10).replace('-', '.');
+          return '<li><span class="al-d">' + esc(d) + '</span><span class="al-memo">' + esc(r.memo || '(내역 미입력)') +
+            (r.payment ? '<small>' + esc(r.payment) + '</small>' : '') + '</span><span class="al-amt">' + won(r.applied) + '</span></li>';
+        }).join('') + '</ul></details>';
+    }).join('');
+
+    Array.prototype.forEach.call(listEl.querySelectorAll('details.al-month'), function (el) {
+      el.addEventListener('toggle', function () { state.allowance.open[el.getAttribute('data-month')] = el.open; });
+    });
+  }
+
+  // ---------- 카드1: 수입 대비 지출·저축·투자 비중 ----------
+  function renderRatioSection() {
+    var user = state.ratio.user;
+    var from = state.ratio.from;
+    var to = state.ratio.to;
+
+    var rows = state.rows.map(parseRow).filter(function (r) {
+      if (user !== '전체' && r.user !== user) return false;
+      if (from && r.yearMonth && r.yearMonth < from) return false;
+      if (to && r.yearMonth && r.yearMonth > to) return false;
+      return true;
+    });
+
+    var income = 0, expense = 0, saving = 0, invest = 0;
+    rows.forEach(function (r) {
+      if (r.type === '수입') income += r.applied;
+      else if (r.type === '지출') expense += r.applied;
+      else if (r.type === '저축') saving += r.applied;
+      else if (r.type === '투자') invest += r.applied;
+    });
+
+    var summaryEl = document.getElementById('ratioSummary');
+    var barsEl = document.getElementById('ratioBars');
+    var periodLabel = (from && to) ? (from === to ? from : from + ' ~ ' + to) : '전체 기간';
+
+    if (income <= 0) {
+      summaryEl.textContent = periodLabel + ' · 수입 데이터가 없어 비율을 계산할 수 없습니다.';
+      barsEl.innerHTML = '';
+      return;
+    }
+
+    summaryEl.textContent = periodLabel + ' · 총 수입 ' + won(income) + ' 기준 (100%)';
+
+    var items = [
+      { label: '지출', amount: expense, color: 'var(--expense)' },
+      { label: '저축', amount: saving, color: 'var(--saving)' },
+      { label: '투자', amount: invest, color: 'var(--invest)' }
+    ];
+
+    barsEl.innerHTML = items.map(function (it) {
+      var ratio = it.amount / income;
+      var widthPct = Math.max(Math.min(ratio * 100, 100), 0);
+      return '<div class="ratio-row">' +
+        '<div class="ratio-label"><span>' + it.label + '</span><span>' + won(it.amount) + ' · ' + pct(ratio) + '</span></div>' +
+        '<div class="ratio-track"><div class="ratio-fill" style="width:' + widthPct + '%; background:' + it.color + ';"></div></div>' +
+        '</div>';
+    }).join('');
+  }
+
+  // ---------- 카드2: 지출 대분류(또는 소분류)별 비중 + 전월대비 ----------
+  function renderExpenseSection() {
+    var user = state.expense.user;
+    var month = state.expense.month;
+    var level = state.expense.level;
+    var prevMonth = prevMonthOf(month);
+
+    var expenseRows = state.rows.map(parseRow).filter(function (r) {
+      if (r.type !== '지출') return false;
+      if (user !== '전체' && r.user !== user) return false;
+      return true;
+    });
+
+    function groupKey(r) {
+      var main = r.main || '기타';
+      if (level === 'sub') return main + ' · ' + (r.sub || '기타');
+      return main;
+    }
+
+    var curMap = {};
+    expenseRows.filter(function (r) { return r.yearMonth === month; }).forEach(function (r) {
+      var k = groupKey(r);
+      curMap[k] = (curMap[k] || 0) + r.applied;
+    });
+
+    var prevMap = {};
+    if (prevMonth) {
+      expenseRows.filter(function (r) { return r.yearMonth === prevMonth; }).forEach(function (r) {
+        var k = groupKey(r);
+        prevMap[k] = (prevMap[k] || 0) + r.applied;
+      });
+    }
+
+    var total = Object.keys(curMap).reduce(function (s, k) { return s + curMap[k]; }, 0);
+    var allKeys = Object.keys(curMap).sort(function (a, b) { return curMap[b] - curMap[a]; });
+    var TOP_N = 10;
+    var keys = allKeys.slice(0, TOP_N);
+    var restKeys = allKeys.slice(TOP_N);
+
+    var tbody = document.getElementById('expenseCategoryTableBody');
+    var empty = document.getElementById('expenseCategoryEmpty');
+
+    if (!allKeys.length) {
+      tbody.innerHTML = '';
+      empty.style.display = 'block';
+      empty.textContent = month ? (month + '에는 지출 내역이 없어요.') : '지출 내역이 없어요.';
+      return;
+    }
+    empty.style.display = 'none';
+
+    var rowsHtml = keys.map(function (k, idx) {
+      var amt = curMap[k];
+      var ratio = total ? amt / total : 0;
+      var prevAmt = prevMap[k] || 0;
+      var delta = amt - prevAmt;
+      var deltaPct = prevAmt ? (delta / prevAmt) : null;
+      var deltaClass = delta > 0 ? 'delta-up' : (delta < 0 ? 'delta-down' : '');
+      var deltaText;
+      if (!prevMonth) {
+        deltaText = '-';
+      } else if (delta === 0 && prevAmt === 0) {
+        deltaText = '-';
+      } else if (delta === 0) {
+        deltaText = '변동 없음';
+      } else {
+        var arrow = delta > 0 ? '▲' : '▼';
+        deltaText = arrow + ' ' + won(Math.abs(delta)) + (deltaPct !== null ? ' (' + pct(Math.abs(deltaPct)) + ')' : ' (신규)');
+      }
+      var color = PALETTE[idx % PALETTE.length];
+
+      return '<tr>' +
+        '<td>' + k + '</td>' +
+        '<td style="text-align:right;">' + won(amt) + '</td>' +
+        '<td><div class="mini-bar-cell"><div class="mini-bar-track"><div class="mini-bar-fill" style="width:' + (ratio * 100) + '%; background:' + color + ';"></div></div><span>' + pct(ratio) + '</span></div></td>' +
+        '<td style="text-align:right;" class="' + deltaClass + '">' + deltaText + '</td>' +
+        '</tr>';
+    }).join('');
+
+    if (restKeys.length) {
+      var restAmt = restKeys.reduce(function (s, k) { return s + curMap[k]; }, 0);
+      var restRatio = total ? restAmt / total : 0;
+      rowsHtml += '<tr style="opacity:0.7;">' +
+        '<td>그 외 ' + restKeys.length + '개 항목</td>' +
+        '<td style="text-align:right;">' + won(restAmt) + '</td>' +

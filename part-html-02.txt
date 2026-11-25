@@ -1,0 +1,173 @@
+      <div>
+        <label>계좌(증권사)</label>
+        <input type="text" name="account" id="tradeAccountInput" list="tradeAccountList" placeholder="예: 미래에셋 종합주식 _ 정훈" required>
+        <datalist id="tradeAccountList"></datalist>
+      </div>
+      <div>
+        <label>종목명</label>
+        <input type="text" name="name" id="tradeNameInput" list="tradeNameList" placeholder="예: TIGER 미국나스닥 100" required>
+        <datalist id="tradeNameList"></datalist>
+      </div>
+      <div>
+        <label>종목코드 (선택, 과거 입력 있으면 자동완성)</label>
+        <input type="text" name="code" id="tradeCodeInput" placeholder="예: 133690">
+      </div>
+      <div>
+        <label>섹터 (선택, 과거 입력 있으면 자동완성)</label>
+        <input type="text" name="sector" id="tradeSectorInput">
+      </div>
+      <div>
+        <label>단가</label>
+        <input type="number" name="price" placeholder="10000" required>
+      </div>
+      <div>
+        <label>수량</label>
+        <input type="number" name="quantity" placeholder="10" required>
+      </div>
+      <div class="full">
+        <label>비고 (선택)</label>
+        <input type="text" name="note">
+      </div>
+      <div class="full hint" style="margin:0 0 4px;">실제 거래한 날짜·시간을 입력하세요(입력한 날짜가 아니라). 같은 날 같은 계좌+종목으로 여러 건을 나중에 몰아 입력할 때는 시간을 실제 순서에 맞게 넣어야 평단가/실현손익이 정확히 계산돼요.</div>
+      <div class="full" style="display:flex; gap:8px; justify-content:flex-end;">
+        <button type="button" class="btn-secondary" id="cancelTradeFormBtn">취소</button>
+        <button type="submit" class="btn-primary" id="submitTradeBtn">저장</button>
+      </div>
+      <div class="full status-text" id="tradeFormStatus"></div>
+    </form>
+
+    <div id="tradeNoAccountEmpty" class="empty-state" style="display:none;">매매내역이 없어요. 위에서 새 매매를 추가해보세요.</div>
+
+    <div id="tradeContent" style="display:none;">
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="label">누적 실현손익</div><div class="value" id="tradeKpiRealized">-</div></div>
+        <div class="kpi-card"><div class="label">현재 평가금액</div><div class="value" id="tradeKpiValuation">-</div></div>
+        <div class="kpi-card"><div class="label">실 투자금액</div><div class="value" id="tradeKpiInvested">-</div></div>
+        <div class="kpi-card"><div class="label">수익률 (평가 기준)</div><div class="value" id="tradeKpiReturn">-</div></div>
+        <div class="kpi-card"><div class="label">평균 보유기간</div><div class="value" id="tradeKpiHoldingDays">-</div></div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;">
+        <div class="toolbar">
+          <h3 style="margin:0;">실현손익 (월별)</h3>
+        </div>
+        <div id="tradePnlNoDataEmpty" class="empty-state" style="display:none;">해당 계좌에 매도(실현손익) 내역이 없어요.</div>
+        <div id="tradePnlBox"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;">
+        <h3>종목별 손익 기여도</h3>
+        <div class="hint" style="margin-bottom:10px;">매도해서 확정된 손익을 종목별로 합친 순위예요.</div>
+        <div id="tradePnlByStockBox"></div>
+        <div class="empty-state" id="tradePnlByStockEmpty" style="display:none;">해당 계좌에 매도(실현손익) 내역이 없어요.</div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;">
+        <div class="toolbar">
+          <h3 style="margin:0;">포트폴리오 비중</h3>
+          <div class="segmented" id="tradeAllocationToggle">
+            <button type="button" class="seg-btn active" data-mode="name">종목별</button>
+            <button type="button" class="seg-btn" data-mode="sector">섹터별</button>
+          </div>
+        </div>
+        <div id="tradeAllocationBox" style="margin-top:12px;"></div>
+        <div class="empty-state" id="tradeAllocationEmpty" style="display:none;">보유 중인 종목이 없어요.</div>
+      </div>
+
+      <div class="card">
+        <h3>보유 종목 현황</h3>
+        <div class="table-wrap">
+          <table id="holdingsTable">
+            <thead>
+              <tr><th>종목명</th><th style="text-align:right;">보유수량</th><th style="text-align:right;">평균단가</th><th style="text-align:right;">현재가</th><th style="text-align:right;">평가금액</th><th style="text-align:right;">평가손익</th><th style="text-align:right;">수익률</th></tr>
+            </thead>
+            <tbody id="holdingsTableBody"></tbody>
+          </table>
+          <div class="empty-state" id="holdingsEmpty" style="display:none;">보유 중인 종목이 없어요.</div>
+        </div>
+        <div class="hint" id="tradePriceStatus">현재가는 시트의 GOOGLEFINANCE 값을 가져옵니다. 연동돼 있지 않으면 예시 스냅샷 값이 표시됩니다.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="tabAssets" class="tab-panel" style="display:none;">
+
+    <div class="mini-filter-bar" style="margin-bottom:18px;">
+      <span class="hint" id="assetAsOfHint" style="font-size:12px;color:var(--muted);"></span>
+      <button class="btn-primary" id="toggleAssetFormBtn" style="margin-left:auto;">+ 계좌 등록</button>
+    </div>
+
+    <form class="entry-form" id="assetForm" style="display:none; margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border);">
+      <div>
+        <label>계좌명</label>
+        <input type="text" name="name" placeholder="예: 정훈_토스뱅크 입출금 통장" required>
+      </div>
+      <div>
+        <label>유형</label>
+        <select name="type" required>
+          <option value="현금성">현금성</option>
+          <option value="적금">적금</option>
+          <option value="청약">청약</option>
+          <option value="CMA">CMA</option>
+          <option value="투자">투자 (참고용, 매매내역서에서 자동 계산)</option>
+        </select>
+      </div>
+      <div>
+        <label>소유자 (현금성 계좌는 비워두세요)</label>
+        <select name="owner" id="assetOwnerSelect">
+          <option value="">-</option>
+        </select>
+      </div>
+      <div>
+        <label>시작잔액 (가계부 기록 이전 잔액)</label>
+        <input type="number" name="startBalance" placeholder="0">
+      </div>
+      <div>
+        <label>출금 매칭 키워드 (선택)</label>
+        <input type="text" name="withdrawKeyword" placeholder="예: CMA, 파킹 (가계부의 '출금' 소분류에 포함되는 단어)">
+      </div>
+      <div class="full">
+        <label>비고 (선택)</label>
+        <input type="text" name="note">
+      </div>
+      <div class="full" style="display:flex; gap:8px; justify-content:flex-end;">
+        <button type="button" class="btn-secondary" id="cancelAssetFormBtn">취소</button>
+        <button type="submit" class="btn-primary" id="submitAssetBtn">저장</button>
+      </div>
+      <div class="full status-text" id="assetFormStatus"></div>
+    </form>
+
+    <div class="kpi-grid" style="display:none;">
+      <div class="kpi-card"><div class="label">총 자산</div><div class="value" id="assetKpiTotal">-</div></div>
+      <div class="kpi-card"><div class="label">현금성</div><div class="value" id="assetKpiCash">-</div></div>
+      <div class="kpi-card"><div class="label">CMA</div><div class="value" id="assetKpiCma">-</div></div>
+      <div class="kpi-card"><div class="label">적금</div><div class="value" id="assetKpiSavingsOnly">-</div></div>
+      <div class="kpi-card"><div class="label">청약</div><div class="value" id="assetKpiSubscription">-</div></div>
+      <div class="kpi-card"><div class="label">투자 평가금액</div><div class="value" id="assetKpiInvest">-</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>1억 목표 상세</h3>
+      <div id="goalDetailBox" class="dt-stack"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>계좌 리스트</h3>
+      <div class="table-wrap">
+        <table id="assetListTable">
+          <thead><tr><th>계좌명</th><th>유형</th><th>소유자</th><th style="text-align:right;">현재 잔액</th></tr></thead>
+          <tbody id="assetListTableBody"></tbody>
+        </table>
+        <div class="empty-state" id="assetListEmpty" style="display:none;">등록된 계좌가 없어요. 위에서 계좌를 등록해보세요.</div>
+      </div>
+      <div class="hint" id="assetUnclassifiedHint" style="display:none;"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>계좌별 잔액 추이</h3>
+      <div id="accountTrendBox" class="dt-stack"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>자산 구성 추이</h3>

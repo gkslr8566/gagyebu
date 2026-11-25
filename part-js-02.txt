@@ -1,0 +1,210 @@
+        return res.text().then(function (text) {
+          var data;
+          try { data = JSON.parse(text); }
+          catch (e) { throw new Error('응답이 JSON이 아닙니다 (HTTP ' + res.status + '). 배포 URL/권한을 확인하세요. 응답 앞부분: ' + text.slice(0, 120)); }
+          if (data && data.error) throw new Error('Apps Script 오류: ' + data.error);
+          if (!data || !('rows' in data)) throw new Error('예상치 못한 응답 형식입니다: ' + text.slice(0, 120));
+          return { rows: data.rows };
+        });
+      });
+    }).then(function (result) {
+      cacheSet_('cache_ledger', result.rows);
+      return result;
+    }).catch(function (err) {
+      console.error('불러오기 실패', err);
+      var cached = cacheGet_('cache_ledger');
+      if (cached) return { rows: cached, error: (err && err.message) || String(err), fromCache: true };
+      return { rows: null, error: (err && err.message) || String(err) };
+    });
+  }
+
+  function refreshAll() {
+    var badge = document.getElementById('statusBadge');
+    var label = document.getElementById('dataSourceLabel');
+    var url = getServerUrl();
+
+    if (!url) {
+      state.rows = loadSeedData();
+      badge.textContent = '미연동';
+      badge.className = 'badge';
+      label.textContent = '구글시트와 연동되지 않았습니다. ⚙ 시트 연동 설정에서 URL을 등록하세요.';
+      afterLoad();
+      return;
+    }
+
+    badge.textContent = '불러오는 중...';
+    label.textContent = '구글시트에서 데이터를 불러오는 중입니다...';
+    fetchLiveData().then(function (result) {
+      var rows = result.rows;
+      if (rows === null) {
+        badge.textContent = '연동 실패';
+        badge.className = 'badge';
+        label.textContent = '⚠ ' + (result.error || '연동에 실패했습니다.');
+        state.rows = loadSeedData();
+      } else if (result.fromCache) {
+        badge.textContent = '연결 불안정 (최근 데이터 표시)';
+        badge.className = 'badge';
+        label.textContent = '⚠ 네트워크가 불안정해서 최신 데이터를 못 불러왔어요. 마지막으로 성공했던 데이터(' + rows.length + '건)를 보여주는 중입니다. 잠시 후 "↻ 새로고침"을 다시 눌러보세요.';
+        state.rows = rows;
+      } else if (rows.length === 0) {
+        badge.textContent = '연동됨 · 0건';
+        badge.className = 'badge';
+        label.textContent = '⚠ 시트 연결은 됐지만 "' + LEDGER_SHEET + '" 탭에서 데이터를 찾지 못했습니다. Apps Script가 이 스프레드시트에 바인딩되어 있는지, 탭 이름이 정확한지 확인하세요.';
+        state.rows = [];
+      } else {
+        badge.textContent = '실시간 연동됨';
+        badge.className = 'badge live';
+        label.textContent = '구글시트와 연동된 실시간 데이터입니다. (' + rows.length + '건)';
+        state.rows = rows;
+      }
+      afterLoad();
+    });
+  }
+
+  function afterLoad() {
+    populateFilters();
+    render();
+    renderAssetsTab();
+    renderGoalsTab();
+    renderVehicleTab();
+    renderHomeTab_();
+  }
+
+  // ---------- 매매내역서(투자) ----------
+  function loadSeedTrades() {
+    try { return JSON.parse(document.getElementById('seed-trades').textContent); }
+    catch (e) { return []; }
+  }
+  function loadSeedPrices() {
+    try { return JSON.parse(document.getElementById('seed-prices').textContent); }
+    catch (e) { return []; }
+  }
+
+  function fetchSheetList_(sheetName) {
+    var url = getServerUrl();
+    if (!url) return Promise.resolve({ rows: null });
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    var fullUrl = url + sep + 'action=list&sheet=' + encodeURIComponent(sheetName);
+    var cacheKey = 'cache_sheet_' + sheetName;
+    return withRetry_(function () {
+      return fetch(fullUrl).then(function (res) {
+        return res.text().then(function (text) {
+          var data;
+          try { data = JSON.parse(text); }
+          catch (e) { throw new Error('응답이 JSON이 아닙니다 (HTTP ' + res.status + ')'); }
+          if (data && data.error) throw new Error(data.error);
+          if (!data || !('rows' in data)) throw new Error('예상치 못한 응답 형식입니다.');
+          return { rows: data.rows };
+        });
+      });
+    }).then(function (result) {
+      cacheSet_(cacheKey, result.rows);
+      return result;
+    }).catch(function (err) {
+      console.error('불러오기 실패', err);
+      var cached = cacheGet_(cacheKey);
+      if (cached) return { rows: cached, error: (err && err.message) || String(err), fromCache: true };
+      return { rows: null, error: (err && err.message) || String(err) };
+    });
+  }
+
+  function fetchCurrentPrices_() {
+    var url = getServerUrl();
+    if (!url) return Promise.resolve({ prices: null });
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    var fullUrl = url + sep + 'action=currentPrices';
+    return withRetry_(function () {
+      return fetch(fullUrl).then(function (res) {
+        return res.text().then(function (text) {
+          var data;
+          try { data = JSON.parse(text); }
+          catch (e) { throw new Error('응답이 JSON이 아닙니다 (HTTP ' + res.status + ')'); }
+          if (data && data.error) throw new Error(data.error);
+          if (!data || !('prices' in data)) throw new Error('예상치 못한 응답 형식입니다. (Code.gs가 최신 버전으로 재배포됐는지 확인하세요)');
+          return { prices: data.prices };
+        });
+      });
+    }).then(function (result) {
+      cacheSet_('cache_prices', result.prices);
+      return result;
+    }).catch(function (err) {
+      console.error('현재가 조회 실패', err);
+      var cached = cacheGet_('cache_prices');
+      if (cached) return { prices: cached, error: (err && err.message) || String(err), fromCache: true };
+      return { prices: null, error: (err && err.message) || String(err) };
+    });
+  }
+
+  function refreshTrades() {
+    var url = getServerUrl();
+    if (!url) {
+      state.trades.rows = loadSeedTrades();
+      state.trades.prices = loadSeedPrices();
+      state.trades.priceStatus = { ok: false, offline: true };
+      renderTradesTab();
+      renderAssetsTab();
+      return;
+    }
+    Promise.all([fetchSheetList_(TRADES_SHEET), fetchCurrentPrices_()]).then(function (results) {
+      var tradeResult = results[0];
+      var priceResult = results[1];
+      state.trades.rows = (tradeResult.rows === null) ? loadSeedTrades() : tradeResult.rows;
+      if (priceResult.prices === null) {
+        state.trades.prices = loadSeedPrices();
+        state.trades.priceStatus = { ok: false, error: priceResult.error };
+      } else {
+        state.trades.prices = priceResult.prices;
+        state.trades.priceStatus = { ok: true, count: priceResult.prices.length, fromCache: !!priceResult.fromCache };
+      }
+      renderTradesTab();
+      renderAssetsTab();
+    });
+  }
+
+  function parseTradeRow(row) {
+    return {
+      id: row['ID'],
+      yearMonth: normStr(row['연월']),
+      date: row['구매일'],
+      account: normStr(row['증권사']),
+      action: normStr(row['매매구분']),
+      name: normStr(row['종목명']),
+      code: normStr(row['종목코드']),
+      market: row['시장구분'] || '',
+      sector: row['섹터'] || '',
+      price: parseAmount(row['평단가']),
+      qtyInput: parseAmount(row['입력수량']),
+      qtySigned: parseAmount(row['계산수량']),
+      rate: parseAmount(row['환율']) || 1,
+      note: row['비고'] || ''
+    };
+  }
+
+  /**
+   * 매매 원본 데이터를 계좌+종목명 기준으로 다시 계산한다.
+   * (구글시트의 기존 실평단가 수식은 종목코드만으로 누적 평균을 구해서
+   *  같은 종목을 여러 계좌에서 매매하면 실현손익이 섞이는 버그가 있었음.
+   *  Code.gs의 recomputeTradeCalculations_()와 동일한 로직으로, 시트가
+   *  아직 고쳐지지 않았어도 화면에는 항상 정확한 값이 보이도록 한다.)
+   */
+  function computeTradeState(rawRows) {
+    var rows = rawRows.map(parseTradeRow).filter(function (r) { return r.id; });
+    var indexed = rows.map(function (r, i) { return { row: r, idx: i }; });
+    indexed.sort(function (a, b) {
+      var da = a.row.date || '', db = b.row.date || '';
+      if (da !== db) return da < db ? -1 : 1;
+      return a.idx - b.idx;
+    });
+
+    var holdings = {}; // "계좌||종목명" -> { account, name, code, sector, qty, cost, avgDateMs }
+
+    indexed.forEach(function (item) {
+      var r = item.row;
+      var key = r.account + '||' + r.name;
+      if (!holdings[key]) holdings[key] = { account: r.account, name: r.name, code: r.code, sector: r.sector, qty: 0, cost: 0, avgDateMs: null };
+      var st = holdings[key];
+      var tradeMs = r.date ? new Date(r.date).getTime() : null;
+
+      var avgCost, realizedPnl;
+      if (r.action === '매도') {
+        avgCost = st.qty > 0 ? st.cost / st.qty : 0;

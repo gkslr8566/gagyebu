@@ -1,0 +1,206 @@
+      el.textContent = '현재가는 시트의 GOOGLEFINANCE 값을 실시간으로 가져옵니다. (연동됨 · ' + status.count + '건)';
+    }
+  }
+
+  /**
+   * 현재 선택된 계좌의 매매내역/보유종목/손익 현황을 사람이 읽기 쉬운 순수 텍스트로 정리한다.
+   * 클로드 등 AI 채팅에 그대로 붙여넣어서 "합리적인 매매를 하고 있는지" 분석을 요청할 수 있도록
+   * 하기 위한 것으로, 앱 안에서 AI 호출을 직접 하지는 않는다(요약 내보내기 방식).
+   */
+  function buildTradeSummaryText_() {
+    var calc = computeTradeState(state.trades.rows);
+    var account = state.tradeUI.account;
+    var accountRows = calc.rows.filter(function (r) { return r.account === account; });
+
+    var realizedTotal = accountRows.reduce(function (s, r) { return s + (r.realizedPnl || 0); }, 0);
+
+    var priceMap = getTradePriceMap_();
+    var holdingsList = Object.keys(calc.holdings)
+      .map(function (k) { return calc.holdings[k]; })
+      .filter(function (h) { return h.account === account && h.qty > 0.0001; });
+
+    var totalInvested = 0, totalValuation = 0;
+    var holdingsRendered = holdingsList.map(function (h) {
+      var avgCost = h.qty > 0 ? h.cost / h.qty : 0;
+      var priceKey = h.account + '||' + h.name;
+      var currentPrice = priceMap[priceKey];
+      var hasPrice = currentPrice !== undefined && currentPrice > 0;
+      var valuation = hasPrice ? h.qty * currentPrice : h.cost;
+      var pnl = valuation - h.cost;
+      var ret = h.cost ? pnl / h.cost : 0;
+      totalInvested += h.cost;
+      totalValuation += valuation;
+      return { name: h.name, sector: h.sector, qty: h.qty, avgCost: avgCost, currentPrice: hasPrice ? currentPrice : null, valuation: valuation, pnl: pnl, ret: ret };
+    }).sort(function (a, b) { return b.valuation - a.valuation; });
+
+    var totalReturn = totalInvested ? (totalValuation - totalInvested) / totalInvested : 0;
+
+    var sortedHistory = accountRows.slice().sort(function (a, b) {
+      var da = a.date || '', db = b.date || '';
+      if (da !== db) return da < db ? 1 : -1; // 최신순
+      return 0;
+    });
+
+    var lines = [];
+    lines.push('📊 매매내역 요약 (계좌: ' + account + ')');
+    lines.push('생성일시: ' + new Date().toISOString().slice(0, 19).replace('T', ' '));
+    lines.push('');
+    lines.push('[전체 요약]');
+    lines.push('- 누적 실현손익: ' + won(realizedTotal));
+    lines.push('- 현재 평가금액: ' + won(totalValuation));
+    lines.push('- 총 투자원금(보유 기준): ' + won(totalInvested));
+    lines.push('- 평가손익: ' + won(totalValuation - totalInvested) + ' (' + (totalInvested ? pct(totalReturn) : '-') + ')');
+    lines.push('');
+
+    lines.push('[보유 종목] (총 ' + holdingsRendered.length + '개)');
+    if (!holdingsRendered.length) {
+      lines.push('(보유 종목 없음)');
+    } else {
+      lines.push('종목명 | 섹터 | 수량 | 평단가 | 현재가 | 평가금액 | 평가손익 | 수익률');
+      holdingsRendered.forEach(function (h) {
+        lines.push(
+          h.name + ' | ' + (h.sector || '-') + ' | ' + h.qty.toLocaleString('ko-KR') + ' | ' +
+          won(h.avgCost) + ' | ' + (h.currentPrice !== null ? won(h.currentPrice) : '-') + ' | ' +
+          won(h.valuation) + ' | ' + won(h.pnl) + ' | ' + pct(h.ret)
+        );
+      });
+    }
+    lines.push('');
+
+    lines.push('[매매 내역] (최신순, 총 ' + sortedHistory.length + '건)');
+    if (!sortedHistory.length) {
+      lines.push('(매매 내역 없음)');
+    } else {
+      lines.push('날짜 | 구분 | 종목명 | 가격 | 수량 | 실현손익 | 비고');
+      sortedHistory.forEach(function (r) {
+        lines.push(
+          (r.date || '-').replace('T', ' ') + ' | ' + r.action + ' | ' + r.name + ' | ' +
+          won(r.price) + ' | ' + Math.abs(r.qtySigned).toLocaleString('ko-KR') + ' | ' +
+          (r.action === '매도' ? won(r.realizedPnl || 0) : '-') + ' | ' + (r.note || '-')
+        );
+      });
+    }
+
+    return lines.join('\n');
+  }
+
+  function openTradeSummaryModal_() {
+    var text = buildTradeSummaryText_();
+    document.getElementById('tradeSummaryText').value = text;
+    document.getElementById('tradeSummaryStatus').textContent = '';
+    document.getElementById('tradeSummaryModal').classList.add('open');
+  }
+
+  function copyTradeSummaryToClipboard_() {
+    var textarea = document.getElementById('tradeSummaryText');
+    var statusEl = document.getElementById('tradeSummaryStatus');
+    textarea.focus();
+    textarea.select();
+
+    function showOk() {
+      statusEl.className = 'status-text status-ok';
+      statusEl.textContent = '✓ 복사했습니다. AI 채팅에 붙여넣으세요.';
+    }
+    function showFail() {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 자동 복사에 실패했습니다. 위 텍스트 영역에서 직접 선택 후 복사(Ctrl/Cmd+C)하세요.';
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textarea.value).then(showOk).catch(function () {
+        try { document.execCommand('copy'); showOk(); } catch (e) { showFail(); }
+      });
+    } else {
+      try { document.execCommand('copy'); showOk(); } catch (e) { showFail(); }
+    }
+  }
+
+
+
+
+  function submitTrade(ev) {
+    ev.preventDefault();
+    var form = document.getElementById('tradeForm');
+    var statusEl = document.getElementById('tradeFormStatus');
+    var url = getServerUrl();
+
+    var entry = {
+      date: form.date.value,
+      action: form.action.value,
+      account: form.account.value,
+      name: form.name.value,
+      code: form.code.value,
+      sector: form.sector.value,
+      price: Number(form.price.value) || 0,
+      quantity: Number(form.quantity.value) || 0,
+      note: form.note.value
+    };
+
+    if (!url) {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 시트 연동이 설정되지 않아 저장할 수 없습니다. 상단 "시트 연동 설정"에서 URL을 등록하세요.';
+      return;
+    }
+
+    statusEl.className = 'status-text';
+    statusEl.textContent = '저장 중...';
+    document.getElementById('submitTradeBtn').disabled = true;
+
+    fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'addTrade', entry: entry })
+    }).then(function (res) { return res.json(); })
+      .then(function (data) {
+        document.getElementById('submitTradeBtn').disabled = false;
+        if (data.ok) {
+          statusEl.className = 'status-text status-ok';
+          statusEl.textContent = '✓ 저장 완료! 목록을 새로고침합니다.';
+          form.reset();
+          refreshTrades();
+        } else {
+          statusEl.className = 'status-text status-err';
+          statusEl.textContent = '저장 실패: ' + (data.error || '알 수 없는 오류');
+        }
+      }).catch(function (err) {
+        document.getElementById('submitTradeBtn').disabled = false;
+        statusEl.className = 'status-text status-err';
+        statusEl.textContent = '저장 실패: ' + err;
+      });
+  }
+
+  // ---------- 자산 내역(순자산 추적) ----------
+  var ASSET_MASTER_SHEET = '⚙️계좌 마스터';
+  var ASSET_SNAPSHOT_SHEET = '📊RAW_자산스냅샷';
+  var ASSET_TYPES = ['현금성', '적금', '청약', 'CMA', '투자'];
+  var ASSET_TYPE_COLORS = { '현금성': '#3b82f6', '적금': '#10b981', '청약': '#f59e0b', 'CMA': '#a855f7', '투자': '#ef4444' };
+  var assetTotalChart = null;
+  var assetTypeChart = null;
+
+  function loadSeedAssetMaster() {
+    try { return JSON.parse(document.getElementById('seed-asset-master').textContent); }
+    catch (e) { return []; }
+  }
+  function loadSeedAssetSnapshot() {
+    try { return JSON.parse(document.getElementById('seed-asset-snapshot').textContent); }
+    catch (e) { return []; }
+  }
+
+  function refreshAssets() {
+    var url = getServerUrl();
+    if (!url) {
+      state.assets.master = loadSeedAssetMaster();
+      state.assets.snapshots = loadSeedAssetSnapshot();
+      renderAssetsTab();
+      renderGoalsTab();
+      return;
+    }
+    Promise.all([fetchSheetList_(ASSET_MASTER_SHEET), fetchSheetList_(ASSET_SNAPSHOT_SHEET)]).then(function (results) {
+      var masterResult = results[0];
+      var snapResult = results[1];
+      state.assets.master = (masterResult.rows === null) ? loadSeedAssetMaster() : masterResult.rows;
+      state.assets.snapshots = (snapResult.rows === null) ? loadSeedAssetSnapshot() : snapResult.rows;
+      renderAssetsTab();
+      // 목표 탭의 "현재 자산" 기반 미래 예측치도 최신 자산 데이터로 다시 계산한다.
+      renderGoalsTab();
+      // 안전망: 이번 달 투자 계좌 스냅샷이 없거나 오래됐으면 자산 탭을 열 때마다 최신화를 시도한다.
+      // 실패해도 화면 표시(항상 실시간으로 다시 계산하는 라이브 값)에는 영향이 없으므로 결과를 기다리지 않는다.

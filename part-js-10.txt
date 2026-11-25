@@ -1,0 +1,198 @@
+        '<td><div class="mini-bar-cell"><div class="mini-bar-track"><div class="mini-bar-fill" style="width:' + (restRatio * 100) + '%; background:var(--muted);"></div></div><span>' + pct(restRatio) + '</span></div></td>' +
+        '<td style="text-align:right;">-</td>' +
+        '</tr>';
+    }
+
+    tbody.innerHTML = rowsHtml;
+  }
+
+  function renderTable(rows) {
+    var sorted = rows.slice().sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
+    var visible = sorted.slice(0, state.visibleCount);
+    var tbody = document.getElementById('txTableBody');
+    var empty = document.getElementById('txEmpty');
+
+    if (!visible.length) {
+      tbody.innerHTML = '';
+      empty.style.display = 'block';
+    } else {
+      empty.style.display = 'none';
+      tbody.innerHTML = visible.map(function (r) {
+        var amtClass = r.type === '수입' ? 'amt-pos' : 'amt-neg';
+        var sign = r.type === '수입' ? '+' : '-';
+        return '<tr>' +
+          '<td>' + (r.date || '') + '</td>' +
+          '<td><span class="tag">' + r.type + '</span></td>' +
+          '<td>' + (r.main || '') + '</td>' +
+          '<td>' + (r.sub || '') + '</td>' +
+          '<td>' + (r.memo || '') + '</td>' +
+          '<td>' + (r.user || '') + '</td>' +
+          '<td>' + (r.payment || '') + '</td>' +
+          '<td style="text-align:right;" class="' + amtClass + '">' + sign + won(Math.abs(r.applied)).replace('₩','₩') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    document.getElementById('loadMoreBtn').style.display = sorted.length > state.visibleCount ? 'inline-block' : 'none';
+  }
+
+  // ---------- 입력 폼 ----------
+  function updateCategoryOptions() {
+    var type = document.getElementById('typeSelect').value;
+    var meta = window.__categoryList || [];
+    var filtered = meta.filter(function (c) { return c.indexOf(type + ' >') === 0 || c.indexOf(type + '>') === 0; });
+    var sel = document.getElementById('categorySelect');
+    if (!filtered.length) {
+      // 메타 정보가 없으면 현재 데이터에서 유추
+      var set = new Set();
+      state.rows.forEach(function (r) {
+        if (r['수입/지출'] === type && r['분류']) set.add(r['분류']);
+      });
+      filtered = Array.from(set);
+    }
+    sel.innerHTML = filtered.map(function (c) { return '<option value="' + c + '">' + c + '</option>'; }).join('');
+  }
+
+  function fetchMetaAndFillCategories() {
+    var url = getServerUrl();
+    if (!url) { window.__categoryList = []; updateCategoryOptions(); return; }
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    fetch(url + sep + 'action=meta').then(function (r) { return r.json(); }).then(function (data) {
+      window.__categoryList = data.categoryList || [];
+      updateCategoryOptions();
+    }).catch(function () {
+      window.__categoryList = [];
+      updateCategoryOptions();
+    });
+  }
+
+  function submitEntry(ev) {
+    ev.preventDefault();
+    var form = document.getElementById('entryForm');
+    var statusEl = document.getElementById('formStatus');
+    var url = getServerUrl();
+
+    var entry = {
+      date: form.date.value,
+      type: form.type.value,
+      category: form.category.value,
+      amount: Number(form.amount.value) || 0,
+      discount: Number(form.discount.value) || 0,
+      user: form.user.value,
+      paymentMethod: form.paymentMethod.value,
+      memo: form.memo.value,
+      note: form.note.value
+    };
+
+    if (!url) {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 시트 연동이 설정되지 않아 저장할 수 없습니다. 상단 "시트 연동 설정"에서 URL을 등록하세요.';
+      return;
+    }
+
+    statusEl.className = 'status-text';
+    statusEl.textContent = '저장 중...';
+    document.getElementById('submitEntryBtn').disabled = true;
+
+    fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'addEntry', entry: entry })
+    }).then(function (res) { return res.json(); })
+      .then(function (data) {
+        document.getElementById('submitEntryBtn').disabled = false;
+        if (data.ok) {
+          statusEl.className = 'status-text status-ok';
+          statusEl.textContent = '✓ 저장 완료! 목록을 새로고침합니다.';
+          form.reset();
+          refreshAll();
+        } else {
+          statusEl.className = 'status-text status-err';
+          statusEl.textContent = '저장 실패: ' + (data.error || '알 수 없는 오류');
+        }
+      }).catch(function (err) {
+        document.getElementById('submitEntryBtn').disabled = false;
+        statusEl.className = 'status-text status-err';
+        statusEl.textContent = '저장 실패: ' + err;
+      });
+  }
+
+  // ---------- 이벤트 바인딩 ----------
+  function bindEvents() {
+    document.getElementById('userFilter').addEventListener('change', function (e) {
+      state.filteredUser = e.target.value; render();
+    });
+    document.getElementById('monthFilter').addEventListener('change', function (e) {
+      state.filteredMonth = e.target.value; render();
+    });
+    document.getElementById('refreshBtn').addEventListener('click', function () {
+      // "새로고침"은 현재 보이는 탭뿐 아니라 가계부/매매내역서/자산 내역 데이터를 모두 다시 불러온다.
+      // (자산 내역 탭은 최초 로드 시에만 계좌 마스터/스냅샷을 가져오므로, 시트에서 시작잔액 등을
+      //  직접 고친 뒤에는 이 버튼을 눌러야 반영된다.)
+      refreshAll();
+      refreshTrades();
+      refreshAssets();
+      refreshGoals();
+      refreshVehicle();
+    });
+    document.getElementById('loadMoreBtn').addEventListener('click', function () {
+      state.visibleCount += 30; render();
+    });
+
+    document.getElementById('ratioUserFilter').addEventListener('change', function (e) {
+      state.ratio.user = e.target.value; renderRatioSection();
+    });
+    document.getElementById('ratioFromMonth').addEventListener('change', function (e) {
+      state.ratio.from = e.target.value; renderRatioSection();
+    });
+    document.getElementById('ratioToMonth').addEventListener('change', function (e) {
+      state.ratio.to = e.target.value; renderRatioSection();
+    });
+
+    document.getElementById('expenseUserFilter').addEventListener('change', function (e) {
+      state.expense.user = e.target.value; renderExpenseSection();
+    });
+    document.getElementById('expenseMonthFilter').addEventListener('change', function (e) {
+      state.expense.month = e.target.value; renderExpenseSection();
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#expenseLevelToggle .seg-btn'), function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(document.querySelectorAll('#expenseLevelToggle .seg-btn'), function (b) {
+          b.classList.remove('active');
+        });
+        btn.classList.add('active');
+        state.expense.level = btn.getAttribute('data-level');
+        renderExpenseSection();
+      });
+    });
+
+    document.getElementById('allowanceFromMonth').addEventListener('change', function (e) {
+      state.allowance.from = e.target.value; renderAllowanceSection();
+    });
+    document.getElementById('allowanceToMonth').addEventListener('change', function (e) {
+      state.allowance.to = e.target.value; renderAllowanceSection();
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), function (b) {
+          b.classList.remove('active');
+        });
+        btn.classList.add('active');
+        var tab = btn.getAttribute('data-tab');
+        document.getElementById('tabHome').style.display = (tab === 'home') ? '' : 'none';
+        document.getElementById('tabLedger').style.display = (tab === 'ledger') ? '' : 'none';
+        // 정훈 용돈은 가계부 탭 아래, 목표는 자산 탭 아래에 함께 보여준다
+        document.getElementById('tabAllowance').style.display = (tab === 'ledger') ? '' : 'none';
+        document.getElementById('tabTrades').style.display = (tab === 'trades') ? '' : 'none';
+        document.getElementById('tabAssets').style.display = (tab === 'assets') ? '' : 'none';
+        document.getElementById('tabGoals').style.display = 'none'; // 목표 화면은 홈의 1억 목표·계산기와 겹쳐서 숨김
+        document.getElementById('tabVehicle').style.display = (tab === 'vehicle') ? '' : 'none';
+        // 캔버스가 숨김 상태에서 그려지면 크기가 0으로 잡히므로, 탭이 보일 때 다시 그린다.
+        if (tab === 'home') renderHomeTab_();
+        if (tab === 'ledger') render();
+        if (tab === 'trades') renderTradesTab();
+        if (tab === 'assets') renderAssetsTab();
+        if (tab === 'vehicle') renderVehicleTab();
+      });
+    });
+

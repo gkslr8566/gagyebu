@@ -1,0 +1,180 @@
+    document.getElementById('goalInvestActual').textContent = won(g.invest);
+    document.getElementById('goalInvestTarget').textContent = won(g.targetInvest);
+    document.getElementById('goalSavingActual').textContent = won(g.saving);
+    document.getElementById('goalSavingTarget').textContent = won(g.targetSaving);
+    document.getElementById('goalSpendActual').textContent = won(g.expense);
+    document.getElementById('goalSpendTarget').textContent = won(g.targetSpend);
+
+    var remainEl = document.getElementById('goalRemainingBudget');
+    remainEl.textContent = won(g.remainingBudget);
+    remainEl.style.color = g.remainingBudget < 0 ? 'var(--expense)' : 'var(--saving)';
+
+    setGoalProgressBar_('goalInvestBar', g.invest, g.targetInvest, true);
+    setGoalProgressBar_('goalSavingBar', g.saving, g.targetSaving, true);
+    setGoalProgressBar_('goalSpendBar', g.expense, g.targetSpend, false);
+
+    document.getElementById('goalProjCurrent').textContent = won(g.currentTotal);
+    document.getElementById('goalProj1y').textContent = won(g.projection.y1);
+    document.getElementById('goalProj5y').textContent = won(g.projection.y5);
+    document.getElementById('goalProj10y').textContent = won(g.projection.y10);
+  }
+
+  function submitGoals(ev) {
+    ev.preventDefault();
+    var form = document.getElementById('goalForm');
+    var statusEl = document.getElementById('goalFormStatus');
+    var url = getServerUrl();
+
+    var entry = {
+      investPct: Number(form.investPct.value) || 0,
+      savingsPct: Number(form.savingsPct.value) || 0
+    };
+
+    if (!url) {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 시트 연동이 설정되지 않아 저장할 수 없습니다. 상단 "시트 연동 설정"에서 URL을 등록하세요.';
+      return;
+    }
+    if (entry.investPct + entry.savingsPct > 100) {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 투자 + 저축 비중 합이 100%를 넘을 수 없어요.';
+      return;
+    }
+
+    statusEl.className = 'status-text';
+    statusEl.textContent = '저장 중...';
+    document.getElementById('submitGoalBtn').disabled = true;
+
+    fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'setGoals', entry: entry })
+    }).then(function (res) { return res.json(); })
+      .then(function (data) {
+        document.getElementById('submitGoalBtn').disabled = false;
+        if (data.ok) {
+          statusEl.className = 'status-text status-ok';
+          statusEl.textContent = '✓ 저장 완료!';
+          state.goals = { investPct: entry.investPct, savingsPct: entry.savingsPct };
+          renderGoalsTab();
+        } else {
+          statusEl.className = 'status-text status-err';
+          statusEl.textContent = '저장 실패: ' + (data.error || '알 수 없는 오류');
+        }
+      }).catch(function (err) {
+        document.getElementById('submitGoalBtn').disabled = false;
+        statusEl.className = 'status-text status-err';
+        statusEl.textContent = '저장 실패: ' + err;
+      });
+  }
+
+  // ---------- 차량 유지비 ----------
+  var VEHICLE_SHEET = '⚙️설정_차량주행거리';
+  // '기타'는 차량관리비 카테고리 중 위 6개(충전/톨비/세차/소모품/수리/주차)에 안 걸리는
+  // 소분류(예: 자동차세처럼 예전에 다르게 입력된 항목)를 놓치지 않고 합계에 포함시키기 위한 항목.
+  var VEHICLE_CATS = ['충전', '톨비', '세차', '소모품', '수리', '주차', '기타', '보험'];
+  var VEHICLE_LABELS = { 충전: '🔋 충전비용', 톨비: '🎫 톨비', 세차: '🧽 세차', 소모품: '▶ 소모품', 수리: '🔧 수리', 주차: '🅿️ 주차', 기타: '➕ 기타(차량관리비)', 보험: '🚘 자동차 보험' };
+  var vehicleTotalChart = null;
+  var vehicleCostPerKmChart = null;
+
+  function refreshVehicle() {
+    var url = getServerUrl();
+    if (!url) { renderVehicleTab(); return; }
+    fetchSheetList_(VEHICLE_SHEET).then(function (result) {
+      state.vehicle.mileage = result.rows || [];
+      renderVehicleTab();
+      renderHomeTab_();
+    });
+  }
+
+  /**
+   * 원장(가계부 내역)에서 "지출 > 차량관리비 > (세차/충전/톨비/소모품/수리/주차)"와
+   * "지출 > 보험 > 자동차 보험" 항목을 월별로 집계한다. 소분류 문자열 앞에 이모지가 붙어
+   * 있어도(예: "🔋 충전") indexOf로 부분일치시켜서 안전하게 잡아낸다.
+   */
+  function computeVehicleMonthlyData_() {
+    var byMonth = {}; // 연월 -> {충전,톨비,세차,소모품,수리,주차,보험}
+    function ensureBucket(ym) {
+      if (!byMonth[ym]) {
+        byMonth[ym] = { 충전: 0, 톨비: 0, 세차: 0, 소모품: 0, 수리: 0, 주차: 0, 기타: 0, 보험: 0 };
+      }
+      return byMonth[ym];
+    }
+
+    (state.rows || []).map(parseRow).forEach(function (r) {
+      if (r.type !== '지출' || !r.yearMonth) return;
+      if (r.main === '차량관리비') {
+        var bucket = ensureBucket(r.yearMonth);
+        if (r.sub.indexOf('충전') >= 0) bucket.충전 += r.applied;
+        else if (r.sub.indexOf('톨비') >= 0) bucket.톨비 += r.applied;
+        else if (r.sub.indexOf('세차') >= 0) bucket.세차 += r.applied;
+        else if (r.sub.indexOf('소모품') >= 0) bucket.소모품 += r.applied;
+        else if (r.sub.indexOf('수리') >= 0) bucket.수리 += r.applied;
+        else if (r.sub.indexOf('주차') >= 0) bucket.주차 += r.applied;
+        else bucket.기타 += r.applied; // 자동차세 등, 위 6개 소분류에 안 걸리는 나머지 차량관리비
+      } else if (r.main === '보험' && r.sub.indexOf('자동차') >= 0) {
+        ensureBucket(r.yearMonth).보험 += r.applied;
+      }
+    });
+
+    var mileageMap = {};
+    (state.vehicle.mileage || []).forEach(function (row) {
+      var ym = normStr(row['연월']);
+      if (ym) mileageMap[ym] = parseAmount(row['주행거리(km)']);
+    });
+
+    var months = Array.from(new Set(Object.keys(byMonth).concat(Object.keys(mileageMap)))).sort();
+
+    var totalSeries = {}, costPerKmSeries = {};
+    months.forEach(function (m) {
+      var b = byMonth[m] || { 충전: 0, 톨비: 0, 세차: 0, 소모품: 0, 수리: 0, 주차: 0, 기타: 0, 보험: 0 };
+      totalSeries[m] = VEHICLE_CATS.reduce(function (s, c) { return s + (b[c] || 0); }, 0);
+      var km = mileageMap[m];
+      costPerKmSeries[m] = (km && km > 0) ? (b.충전 / km) : null;
+    });
+
+    return { months: months, byMonth: byMonth, mileageMap: mileageMap, totalSeries: totalSeries, costPerKmSeries: costPerKmSeries };
+  }
+
+  function renderVehicleTab() {
+    var totalEl = document.getElementById('vehicleTotalValue');
+    if (!totalEl) return; // 아직 DOM이 준비되지 않음
+
+    var calc = computeVehicleMonthlyData_();
+
+    var monthSel = document.getElementById('vehicleMonthFilter');
+    var prevMonth = state.vehicle.month;
+    monthSel.innerHTML = calc.months.map(function (m) { return '<option value="' + m + '">' + m + '</option>'; }).join('');
+    if (!prevMonth || calc.months.indexOf(prevMonth) < 0) prevMonth = calc.months[calc.months.length - 1] || null;
+    state.vehicle.month = prevMonth;
+    if (prevMonth) monthSel.value = prevMonth;
+
+    var ym = state.vehicle.month;
+    document.getElementById('vehicleMonthHint').textContent = ym ? '(' + ym + ' 기준)' : '(데이터 없음)';
+
+    var b = (ym && calc.byMonth[ym]) || { 충전: 0, 톨비: 0, 세차: 0, 소모품: 0, 수리: 0, 주차: 0, 기타: 0, 보험: 0 };
+    var total = VEHICLE_CATS.reduce(function (s, c) { return s + (b[c] || 0); }, 0);
+    totalEl.textContent = won(total);
+
+    var km = ym ? calc.mileageMap[ym] : null;
+    var costPerKmEl = document.getElementById('vehicleCostPerKmValue');
+    var kmHintEl = document.getElementById('vehicleKmHint');
+    if (km && km > 0) {
+      costPerKmEl.textContent = (Math.round((b.충전 / km) * 100) / 100).toLocaleString('ko-KR') + '원/km';
+      kmHintEl.textContent = '이번 달 주행거리: ' + km.toLocaleString('ko-KR') + 'km';
+    } else {
+      costPerKmEl.textContent = '-';
+      kmHintEl.textContent = ym ? '이번 달 주행거리가 입력되지 않았어요. "+ 주행거리 입력"으로 등록해보세요.' : '';
+    }
+
+    var mileageRow = '<tr><td>🚗 주행거리</td><td style="text-align:right;">' + ((km && km > 0) ? km.toLocaleString('ko-KR') + 'km' : '-') + '</td></tr>';
+    document.getElementById('vehicleBreakdownBody').innerHTML = mileageRow + VEHICLE_CATS.map(function (c) {
+      return '<tr><td>' + VEHICLE_LABELS[c] + '</td><td style="text-align:right;">' + won(b[c] || 0) + '</td></tr>';
+    }).join('') + '<tr style="font-weight:600;"><td>합계</td><td style="text-align:right;">' + won(total) + '</td></tr>';
+
+    renderVehicleTotalChart_(calc);
+    renderVehicleCostPerKmChart_(calc);
+  }
+
+
+
+  /** "+ 주행거리 입력" 폼을 열 때, 아직 값이 없으면 지난달을 기본값으로 채워준다. */

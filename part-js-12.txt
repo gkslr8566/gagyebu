@@ -1,0 +1,184 @@
+    { id: 'accounts', title: '계좌별 잔액', size: 'half', on: false },
+    { id: 'sim', title: '1억 달성 계산기', size: 'half', on: false },
+    { id: 'realized', title: '누적 실현손익', size: 'half', on: false },
+    { id: 'car', title: 'km당 충전비', size: 'half', on: false }
+  ];
+  var HOME_GROUP_ORDER = ['고정비', '생활비', '차량', '용돈', '비정기', '미분류'];
+  var HOME_GROUP_COLOR = { '고정비': '#6366f1', '생활비': '#3b82f6', '차량': '#a855f7', '용돈': '#f97316', '비정기': '#94a3b8', '미분류': '#cbd5e1', '저축': '#10b981', '투자': '#f59e0b', '남은 돈': '#e5e7eb' };
+
+  state.home = { month: null, board: null, editing: false, simMonthly: null };
+
+  function esc_(s) {
+    return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  // 금액을 "2억 97만원", "4,664만원"처럼 읽기 쉽게
+  function man_(n) {
+    var num = Number(n) || 0;
+    var neg = num < 0;
+    var a = Math.abs(Math.round(num));
+    var s;
+    if (a < 10000) s = a.toLocaleString('ko-KR');
+    else {
+      var eok = Math.floor(a / 1e8);
+      var m = Math.round((a % 1e8) / 1e4);
+      if (m === 10000) { eok += 1; m = 0; }
+      s = eok ? (eok + '억' + (m ? ' ' + m.toLocaleString('ko-KR') + '만' : '')) : (m.toLocaleString('ko-KR') + '만');
+    }
+    return (neg ? '-' : '') + s + '원';
+  }
+  function pct1_(v) { return (Math.round((Number(v) || 0) * 1000) / 10).toFixed(1) + '%'; }
+  function signed_(n, fmt) { return (n > 0 ? '+' : '') + fmt(n); }
+
+  function defaultBoard_() {
+    return {
+      order: HOME_WIDGETS.map(function (w) { return w.id; }),
+      hidden: HOME_WIDGETS.reduce(function (o, w) { if (!w.on) o[w.id] = true; return o; }, {}),
+      size: HOME_WIDGETS.reduce(function (o, w) { o[w.id] = w.size; return o; }, {})
+    };
+  }
+  // 저장된 설정에 새 위젯이 빠져 있어도 깨지지 않게 기본값과 합친다
+  function normalizeBoard_(b) {
+    var d = defaultBoard_();
+    if (!b || !Array.isArray(b.order)) return d;
+    var known = HOME_WIDGETS.map(function (w) { return w.id; });
+    var order = b.order.filter(function (id) { return known.indexOf(id) >= 0; });
+    known.forEach(function (id) { if (order.indexOf(id) < 0) order.push(id); });
+    var hidden = {}, size = {};
+    known.forEach(function (id) {
+      var wasKnown = b.order.indexOf(id) >= 0;
+      hidden[id] = wasKnown ? !!(b.hidden && b.hidden[id]) : !!d.hidden[id];
+      size[id] = (b.size && (b.size[id] === 'full' || b.size[id] === 'half')) ? b.size[id] : d.size[id];
+    });
+    return { order: order, hidden: hidden, size: size };
+  }
+
+  function loadBoard_() {
+    state.home.board = normalizeBoard_(cacheGet_('cache_home_board'));
+    renderHomeTab_();
+    var url = getServerUrl();
+    if (!url) return;
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    fetch(url + sep + 'action=board').then(function (res) { return res.json(); }).then(function (data) {
+      if (data && data.config) {
+        HOME_CONFIG = data.config;
+        cacheSet_('cache_home_config', HOME_CONFIG);
+      }
+      if (data && data.board) {
+        state.home.board = normalizeBoard_(data.board);
+        cacheSet_('cache_home_board', state.home.board);
+      }
+      if (data && (data.board || data.config)) renderHomeTab_();
+    }).catch(function (err) { console.error('보드 설정 불러오기 실패', err); });
+  }
+
+  function saveBoard_(statusEl) {
+    var board = state.home.board;
+    cacheSet_('cache_home_board', board);
+    var url = getServerUrl();
+    if (!url) { if (statusEl) statusEl.textContent = '시트 연동이 안 돼 있어서 이 기기에만 저장했어요.'; return; }
+    if (statusEl) statusEl.textContent = '저장하는 중…';
+    fetch(url, { method: 'POST', body: JSON.stringify({ action: 'setBoard', board: board }) })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (statusEl) statusEl.textContent = data && data.ok ? '저장했어요. 다른 기기에서도 같은 보드가 보여요.' : ('저장하지 못했어요: ' + ((data && data.error) || '알 수 없는 오류'));
+      })
+      .catch(function (err) { if (statusEl) statusEl.textContent = '저장하지 못했어요: ' + err; });
+  }
+
+  // ---------- 홈: 데이터 계산 ----------
+  function homeGroupOf_(r) {
+    var m = r.main, s = r.sub || '';
+    if (!r.type || !m) return '미분류';
+    if (m === '차량관리비' || m === '과태료' || (m === '보험' && s.indexOf('자동차') >= 0)) return '차량';
+    if (m === '오피스텔' || m === '보험' || m === '휴대폰' || m === '구독료' || m === '대출') return '고정비';
+    if (m === '용돈') return '용돈';
+    if (m === '생활비' || m === '교통' || m === '의료' || m === '미용' || m === '자기개발') return '생활비';
+    return '비정기';
+  }
+
+  function homeMonthAgg_(ym) {
+    var a = { income: 0, expense: 0, saving: 0, invest: 0, groups: {}, mains: {}, pay: {}, days: {}, uncategorized: 0 };
+    (state.rows || []).map(parseRow).forEach(function (r) {
+      if (r.yearMonth !== ym) return;
+      if (r.type === '수입') { a.income += r.applied; return; }
+      if (r.type === '저축') { a.saving += r.applied; return; }
+      if (r.type === '투자') { a.invest += r.applied; return; }
+      if (r.type === '출금' || r.type === '대신결제') return;
+      // 분류가 비어 있는 행은 대부분 아직 분류 안 한 카드 지출이라 지출(미분류)로 본다
+      if (r.type !== '지출' && r.type) return;
+      if (!r.type) a.uncategorized += 1;
+      a.expense += r.applied;
+      var g = homeGroupOf_(r);
+      a.groups[g] = (a.groups[g] || 0) + r.applied;
+      var mk = r.main || '미분류';
+      a.mains[mk] = (a.mains[mk] || 0) + r.applied;
+      var pk = normStr(r.payment) || '미지정';
+      a.pay[pk] = (a.pay[pk] || 0) + r.applied;
+      var dk = String(r.date || '').slice(0, 10);
+      if (dk) a.days[dk] = (a.days[dk] || 0) + r.applied;
+    });
+    return a;
+  }
+
+  function homeAssetCalc_() {
+    var calc = computeAssetState();
+    var months = calc.months || [];
+    var accs = calc.savingsAccounts || [];
+    var series = calc.savingsSeries || {};
+    var debtGoal = HOME_CONFIG.debts.reduce(function (s, d) { return s + (d.inGoal ? d.amount : 0); }, 0);
+    var debtAll = HOME_CONFIG.debts.reduce(function (s, d) { return s + d.amount; }, 0);
+    function excluded(name) { return HOME_CONFIG.goalExcludeKeywords.some(function (k) { return name.indexOf(k) >= 0; }); }
+
+    var goalSeries = {}, savingsAllSeries = {}, nwSeries = {};
+    var firstInvestIdx = -1;
+    months.forEach(function (m, i) {
+      var g = 0, all = 0;
+      accs.forEach(function (a) {
+        var v = (series[a.name] && series[a.name][m]) || 0;
+        all += v;
+        if (!excluded(a.name)) g += v;
+      });
+      goalSeries[m] = g - debtGoal;
+      savingsAllSeries[m] = all;
+      var inv = (calc.typeSeries && calc.typeSeries['투자'] && calc.typeSeries['투자'][m]) || 0;
+      if (inv > 0 && firstInvestIdx < 0) firstInvestIdx = i;
+      nwSeries[m] = HOME_CONFIG.deposit + all + inv - debtAll;
+    });
+    var latest = calc.latestMonth;
+    var balances = accs.map(function (a) {
+      return { name: a.name, type: a.type, owner: a.owner, balance: latest ? ((series[a.name] && series[a.name][latest]) || 0) : a.startBalance, inGoal: !excluded(a.name) };
+    });
+    // 최근 3개월 평균 증가 속도(1억 기준액)
+    var speed = null;
+    if (months.length >= 2) {
+      var tail = months.slice(-4);
+      var diffs = [];
+      for (var i = 1; i < tail.length; i++) diffs.push(goalSeries[tail[i]] - goalSeries[tail[i - 1]]);
+      speed = diffs.reduce(function (s, x) { return s + x; }, 0) / diffs.length;
+    }
+    return {
+      calc: calc, months: months, latest: latest,
+      goalSeries: goalSeries, nwSeries: nwSeries, savingsAllSeries: savingsAllSeries,
+      nwMonths: firstInvestIdx >= 0 ? months.slice(firstInvestIdx) : months,
+      balances: balances, speed: speed, debtAll: debtAll, debtGoal: debtGoal,
+      investNow: calc.kpi ? calc.kpi.invest : 0
+    };
+  }
+
+  function homeInvestAccounts_() {
+    var tc = computeTradeState(state.trades.rows || []);
+    var priceMap = getTradePriceMap_();
+    var byAcc = {};
+    Object.keys(tc.holdings).forEach(function (k) {
+      var h = tc.holdings[k];
+      if (h.qty <= 0.0001) return;
+      var p = priceMap[h.account + '||' + h.name];
+      var val = (p !== undefined && p > 0) ? h.qty * p : h.cost;
+      if (!byAcc[h.account]) byAcc[h.account] = { name: h.account, value: 0, cost: 0, manual: false };
+      byAcc[h.account].value += val;
+      byAcc[h.account].cost += h.cost;
+    });
+    // 매매 기록이 없는 계좌(예: 주향 ISA)는 자산 스냅샷의 최근 수동 기록을 쓴다
+    var lastManual = {};

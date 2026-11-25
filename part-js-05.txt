@@ -1,0 +1,184 @@
+      fetch(url, { method: 'POST', body: JSON.stringify({ action: 'ensureAssetSnapshot' }) }).catch(function () {});
+    });
+  }
+
+  function normalizeMasterAccount_(m) {
+    return {
+      name: normStr(m['계좌명']),
+      type: normStr(m['유형']),
+      owner: normStr(m['소유자']),
+      startBalance: parseAmount(m['시작잔액']),
+      withdrawKeyword: normStr(m['출금키워드']),
+      note: m['비고'] || ''
+    };
+  }
+
+  function assetTextMatches_(accName, keyword, text) {
+    if (!text) return false;
+    if (keyword) return text.indexOf(keyword) >= 0;
+    return text.indexOf(accName) >= 0 || accName.indexOf(text) >= 0;
+  }
+
+  /**
+   * 현금성/적금/청약/CMA 계좌의 월별 잔액을 가계부 내역(저축/출금 항목)으로부터 계산한다.
+   * - 저축 내역: 현금 풀 → 해당 계좌로 이동 (계좌 마스터에 등록된 현금성 계좌로의 저축 항목은
+   *   같은 현금 풀 내부 이동이므로 순자산/현금 풀 총액에는 영향 없음).
+   * - 출금 내역: 해당 계좌 → 현금 풀로 이동 (출금 매칭 키워드 또는 계좌명으로 매칭).
+   * - 매칭되지 않는 저축/출금 항목은 "미분류"로 집계해서 화면에 알려준다.
+   * - 투자 계좌는 매매내역서 데이터(보유수량 × 현재가)로 실시간 계산하고, 과거 달은
+   *   자산 스냅샷 표를 사용한다.
+   */
+  function computeAssetState() {
+    var accounts = (state.assets.master || []).map(normalizeMasterAccount_).filter(function (a) { return a.name; });
+    var months = (state.allMonths || []).slice().sort();
+
+    var cashAccounts = accounts.filter(function (a) { return a.type === '현금성'; });
+    var savingsAccounts = accounts.filter(function (a) { return a.type === '적금' || a.type === '청약' || a.type === 'CMA'; });
+    var cashAccountNames = cashAccounts.map(function (a) { return a.name; });
+
+    var perAccountDelta = {}; // 계좌명 -> { 연월: 증감액 }
+    savingsAccounts.forEach(function (a) { perAccountDelta[a.name] = {}; });
+    var cashDelta = {};
+    months.forEach(function (m) { cashDelta[m] = 0; });
+
+    var unclassified = { amount: 0, items: [] };
+
+    (state.rows || []).forEach(function (row) {
+      var type = normStr(row['수입/지출']);
+      var month = normStr(row['연월']);
+      var sc = parseAmount(row['금액 계산']);
+      if (!month) return;
+      if (cashDelta[month] === undefined) cashDelta[month] = 0;
+
+      if (type === '수입' || type === '지출' || type === '투자') {
+        cashDelta[month] += sc;
+        return;
+      }
+
+      if (type === '저축') {
+        var sub = normStr(row['소분류']);
+        if (cashAccountNames.indexOf(sub) >= 0) return; // 현금 풀 내부 이동
+        cashDelta[month] += sc; // 저축은 현금 풀에서 빠져나감(sc는 이미 음수)
+        var matched = savingsAccounts.filter(function (a) { return a.name === sub; })[0];
+        if (matched) {
+          if (!perAccountDelta[matched.name][month]) perAccountDelta[matched.name][month] = 0;
+          perAccountDelta[matched.name][month] += (-sc);
+        } else {
+          unclassified.amount += (-sc);
+          unclassified.items.push({ month: month, sub: sub, amount: -sc, kind: '저축' });
+        }
+        return;
+      }
+
+      if (type === '출금') {
+        var subW = normStr(row['소분류']);
+        var matchedCash = cashAccounts.filter(function (a) { return assetTextMatches_(a.name, a.withdrawKeyword, subW); })[0];
+        if (matchedCash) return; // 현금 풀 내부 이동
+        var matchedSaving = savingsAccounts.filter(function (a) { return assetTextMatches_(a.name, a.withdrawKeyword, subW); })[0];
+        if (matchedSaving) {
+          if (!perAccountDelta[matchedSaving.name][month]) perAccountDelta[matchedSaving.name][month] = 0;
+          perAccountDelta[matchedSaving.name][month] += sc; // 계좌 잔액 감소(sc는 음수)
+          cashDelta[month] += (-sc); // 현금 풀로 유입
+        } else {
+          unclassified.amount += (-sc);
+          unclassified.items.push({ month: month, sub: subW, amount: -sc, kind: '출금' });
+        }
+        return;
+      }
+    });
+
+    var cashStartBalance = cashAccounts.reduce(function (s, a) { return s + a.startBalance; }, 0);
+    var cashSeries = {};
+    var runningCash = cashStartBalance;
+    months.forEach(function (m) {
+      runningCash += (cashDelta[m] || 0);
+      cashSeries[m] = runningCash;
+    });
+
+    var savingsSeries = {};
+    savingsAccounts.forEach(function (a) {
+      var running = a.startBalance;
+      savingsSeries[a.name] = {};
+      months.forEach(function (m) {
+        running += (perAccountDelta[a.name][m] || 0);
+        savingsSeries[a.name][m] = running;
+      });
+    });
+
+    // 투자: 매매내역서 데이터로 계좌별 실시간 평가금액 계산 (매매내역서 탭과 동일 로직)
+    var tradeCalc = computeTradeState(state.trades.rows || []);
+    var priceMap = getTradePriceMap_();
+    var investLiveByAccount = {};
+    Object.keys(tradeCalc.holdings).forEach(function (k) {
+      var h = tradeCalc.holdings[k];
+      if (h.qty <= 0.0001) return;
+      var priceKey = h.account + '||' + h.name;
+      var currentPrice = priceMap[priceKey];
+      var hasPrice = currentPrice !== undefined && currentPrice > 0;
+      var valuation = hasPrice ? h.qty * currentPrice : h.cost;
+      investLiveByAccount[h.account] = (investLiveByAccount[h.account] || 0) + valuation;
+    });
+
+    // 과거 달은 자산 스냅샷 표 기준, 가장 최근 달은 항상 라이브 값으로 덮어써서 최신 상태 유지
+    var investSnapshotByMonth = {};
+    (state.assets.snapshots || []).forEach(function (s) {
+      var m = normStr(s['연월']);
+      var amt = parseAmount(s['금액']);
+      if (!m) return;
+      investSnapshotByMonth[m] = (investSnapshotByMonth[m] || 0) + amt;
+    });
+    var investLiveTotal = Object.keys(investLiveByAccount).reduce(function (s, k) { return s + investLiveByAccount[k]; }, 0);
+    var latestMonth = months[months.length - 1] || null;
+    var investSeries = {};
+    months.forEach(function (m) { investSeries[m] = investSnapshotByMonth[m] || 0; });
+    if (latestMonth) investSeries[latestMonth] = investLiveTotal;
+
+    // 계좌 리스트(현재 시점 기준)
+    var accountList = [];
+    if (cashAccounts.length) {
+      accountList.push({ name: '현금성 (합계)', type: '현금성', owner: '', balance: latestMonth ? cashSeries[latestMonth] : cashStartBalance });
+    }
+    savingsAccounts.forEach(function (a) {
+      accountList.push({ name: a.name, type: a.type, owner: a.owner, balance: latestMonth ? savingsSeries[a.name][latestMonth] : a.startBalance });
+    });
+    Object.keys(investLiveByAccount).sort().forEach(function (name) {
+      accountList.push({ name: name, type: '투자', owner: '', balance: investLiveByAccount[name] });
+    });
+
+    // 유형별/총계 월별 시리즈
+    var typeSeries = { '현금성': {}, '적금': {}, '청약': {}, 'CMA': {}, '투자': {} };
+    var totalSeries = {};
+    months.forEach(function (m) {
+      typeSeries['현금성'][m] = cashSeries[m] || 0;
+      typeSeries['적금'][m] = 0; typeSeries['청약'][m] = 0; typeSeries['CMA'][m] = 0;
+      savingsAccounts.forEach(function (a) {
+        typeSeries[a.type][m] += (savingsSeries[a.name][m] || 0);
+      });
+      typeSeries['투자'][m] = investSeries[m] || 0;
+      totalSeries[m] = typeSeries['현금성'][m] + typeSeries['적금'][m] + typeSeries['청약'][m] + typeSeries['CMA'][m] + typeSeries['투자'][m];
+    });
+
+    var totalNow = latestMonth ? totalSeries[latestMonth] : 0;
+    var cashNow = latestMonth ? cashSeries[latestMonth] : cashStartBalance;
+    var savingsOnlyNow = latestMonth ? typeSeries['적금'][latestMonth] : 0;
+    var subscriptionNow = latestMonth ? typeSeries['청약'][latestMonth] : 0;
+    var cmaNow = latestMonth ? typeSeries['CMA'][latestMonth] : 0;
+
+    // 월별 "증감액"(그 달에 얼마가 추가/차감됐는지) 시리즈. 이미 계산해둔 누적 시리즈를
+    // 전월과 비교해서 구한다(첫 달은 계좌 시작잔액 대비 증감). 예: 적금에 이번 달 50만원을
+    // 새로 넣었으면 누적 잔액 차트에는 (기존값+50만)으로 보이지만, 이 시리즈에는 50만으로 표시된다.
+    function buildDeltaSeries_(series, baseline) {
+      var out = {};
+      var prev = baseline;
+      months.forEach(function (m) {
+        var cur = series[m] || 0;
+        out[m] = cur - prev;
+        prev = cur;
+      });
+      return out;
+    }
+    var savingsBaselineByType = { '적금': 0, '청약': 0, 'CMA': 0 };
+    savingsAccounts.forEach(function (a) { savingsBaselineByType[a.type] += a.startBalance; });
+    var deltaTypeSeries = {
+      '현금성': buildDeltaSeries_(typeSeries['현금성'], cashStartBalance),
+      '적금': buildDeltaSeries_(typeSeries['적금'], savingsBaselineByType['적금']),

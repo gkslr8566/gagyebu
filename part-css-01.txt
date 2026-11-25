@@ -1,0 +1,237 @@
+
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #1f2430;
+    --muted: #737a8c;
+    --border: #e6e8ee;
+    --income: #3b82f6;
+    --expense: #ef4444;
+    --saving: #10b981;
+    --invest: #f59e0b;
+    --accent: #6366f1;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding-bottom: 60px;
+  }
+  header {
+    background: linear-gradient(135deg, #4f46e5, #6366f1);
+    color: white;
+    padding: 20px 24px;
+    /* 아이폰 홈 화면 앱: 상태표시줄(시계·다이내믹 아일랜드) 아래로 내용이 들어가지 않게 */
+    padding-top: calc(20px + env(safe-area-inset-top, 0px));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  header h1 { font-size: 20px; margin: 0; }
+  header .sub { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+  .header-actions { display: flex; align-items: center; gap: 10px; }
+  .badge {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.18);
+  }
+  .badge.live { background: #10b98133; }
+  button {
+    cursor: pointer;
+    border: none;
+    border-radius: 10px;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    transition: transform 0.05s ease;
+  }
+  button:active { transform: scale(0.97); }
+  .btn-ghost { background: rgba(255,255,255,0.15); color: white; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+
+  main { max-width: 1080px; margin: 0 auto; padding: 20px; }
+
+  .filter-bar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+  select, input, textarea {
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: white;
+    /* 16px 이상이어야 iOS Safari가 입력창 탭할 때 화면을 자동으로 확대하지 않음(그 확대/축소가
+       "화면 크기가 계속 움직이는" 것처럼 보이는 원인이었음) */
+    font-size: 16px;
+    color: var(--text);
+  }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .kpi-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 16px;
+    border: 1px solid var(--border);
+  }
+  .kpi-card .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .kpi-card .value { font-size: 19px; font-weight: 700; }
+  .kpi-card.income .value { color: var(--income); }
+  .kpi-card.expense .value { color: var(--expense); }
+  .kpi-card.saving .value { color: var(--saving); }
+  .kpi-card.invest .value { color: var(--invest); }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 760px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    padding: 18px;
+  }
+  .card h3 { margin: 0 0 12px 0; font-size: 14px; color: var(--text); }
+  .card .hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+  .sub-list { margin-top: 12px; }
+  .sub-list-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: 13px;
+  }
+  .sub-list-item:last-child { border-bottom: none; }
+  .sub-list-item .name { color: var(--muted); }
+  .sub-list-item .amt { font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 9px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tr:hover td { background: #fafbff; }
+  .amt-pos { color: var(--income); font-weight: 600; }
+  .amt-neg { color: var(--expense); font-weight: 600; }
+  /* 주식 손익/수익률은 국내 관행대로 상승(+)은 빨강, 하락(-)은 파랑으로 표시 (가계부 수입/지출과는 반대) */
+  .stock-pos { color: var(--expense); font-weight: 600; }
+  .stock-neg { color: var(--income); font-weight: 600; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--border); color: var(--muted); }
+
+  .table-wrap { overflow-x: auto; }
+
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+
+  form.entry-form { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  form.entry-form .full { grid-column: 1 / -1; }
+  form.entry-form label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+  form.entry-form select, form.entry-form input { width: 100%; }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: none; align-items: center; justify-content: center; z-index: 50;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: white; border-radius: 16px; padding: 22px; width: 90%; max-width: 460px;
+  }
+  .modal h3 { margin-top: 0; }
+  .modal .field { margin-bottom: 12px; }
+  .modal .field label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+  .modal .field input { width: 100%; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .status-text { font-size: 12px; margin-top: 8px; }
+  .status-ok { color: var(--saving); }
+  .status-err { color: var(--expense); }
+
+  .empty-state { text-align: center; color: var(--muted); padding: 30px 10px; font-size: 13px; }
+  .toggle-form-btn { margin-bottom: 14px; }
+
+  .tab-nav { display: flex; gap: 6px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+  .tab-btn {
+    background: transparent; border: none; border-bottom: 2px solid transparent;
+    border-radius: 0; padding: 10px 6px; margin-right: 14px; font-size: 14px; font-weight: 600;
+    color: var(--muted); cursor: pointer;
+  }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel .toolbar h3 { white-space: nowrap; }
+
+  .mini-filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .mini-filter-bar select { font-size: 16px; padding: 7px 10px; }
+
+  .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .seg-btn { border: none; background: white; padding: 7px 12px; font-size: 12px; cursor: pointer; color: var(--muted); font-weight: 600; }
+  .seg-btn.active { background: var(--accent); color: white; }
+
+  .ratio-summary { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .ratio-row { margin-bottom: 16px; }
+  .ratio-row:last-child { margin-bottom: 0; }
+  .ratio-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; font-weight: 600; }
+  .ratio-track { height: 12px; border-radius: 7px; background: var(--bg); overflow: hidden; }
+  .ratio-fill { height: 100%; border-radius: 7px; transition: width 0.2s ease; }
+
+  .mini-bar-cell { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+  .mini-bar-track { width: 50px; height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+  .mini-bar-fill { height: 100%; border-radius: 4px; }
+  .delta-up { color: var(--expense); font-weight: 600; }
+  .delta-down { color: var(--saving); font-weight: 600; }
+
+  .pnl-subchart { margin-bottom: 22px; }
+  .pnl-subchart:last-child { margin-bottom: 0; }
+  .pnl-subchart-title { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+
+  /* ---------- 모바일: 하단 고정 탭바 + 터치 타겟 확대 ---------- */
+  @media (max-width: 640px) {
+    body { padding-bottom: 0; }
+    main { padding-bottom: 84px; }
+    header { position: sticky; top: 0; z-index: 41; padding: 12px 16px; padding-top: calc(12px + env(safe-area-inset-top, 0px)); gap: 8px; }
+    header h1 { font-size: 18px; }
+
+    .tab-nav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      margin-bottom: 0;
+      background: var(--card);
+      border-top: 1px solid var(--border);
+      border-bottom: none;
+      justify-content: space-around;
+      gap: 0;
+      padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+      z-index: 40;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+    }
+    .tab-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      margin-right: 0;
+      border-bottom: none;
+      padding: 6px 2px;
+      font-size: 10.5px;
+      min-height: 48px;
+      justify-content: center;
+    }
+    .tab-btn .tab-icon { font-size: 18px; line-height: 1; }
+    .tab-btn.active { background: transparent; }
+

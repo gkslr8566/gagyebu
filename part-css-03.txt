@@ -1,0 +1,31 @@
+  .sp-bar { position: relative; }
+  .sp-bar .hw-stack { height: 18px; background: var(--bg); }
+  .sp-limit { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); border-radius: 1px; }
+  .sp-limit-key { display: inline-block; width: 2px !important; height: 11px !important; background: var(--text) !important; border-radius: 1px; margin-right: 5px; vertical-align: -2px; }
+  .sp-v { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+  .sp-v em { font-style: normal; color: var(--muted); font-weight: 500; }
+  .hw-pctx { font-style: normal; color: var(--muted); font-weight: 500; }
+  .hw-diverge { display: grid; gap: 7px; }
+  .hw-dv-row { display: grid; grid-template-columns: 76px 1fr 78px; align-items: center; gap: 8px; font-size: 12.5px; }
+  .hw-dv-k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hw-dv-bar { position: relative; height: 10px; }
+  .hw-dv-mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--border); }
+  .hw-dv-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+  .hw-dv-fill.up { background: var(--expense); }
+  .hw-dv-fill.down { background: var(--saving); }
+  .hw-dv-v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .hw-dv-v.up { color: var(--expense); }
+  .hw-dv-v.down { color: var(--saving); }
+  .hw-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .hw-cal-h { font-size: 10.5px; color: var(--muted); text-align: center; }
+  .hw-cal-d { font-size: 10.5px; text-align: center; padding: 4px 0; border-radius: 4px; border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  .hw-inv { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+  .hw-inv-c { background: var(--bg); border-radius: 10px; padding: 10px; display: grid; gap: 2px; font-size: 13px; }
+  .hw-inv-n { font-size: 12px; color: var(--muted); }
+  .hw-inv-v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .hw-range { width: 100%; accent-color: var(--accent); min-height: 0 !important; padding: 0; border: none; }
+  @media (max-width: 640px) {
+    .home-board { grid-template-columns: 1fr; }
+    .hw-card.half { grid-column: auto; }
+    .hw-two { grid-template-columns: 1fr; }
+  }

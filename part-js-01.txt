@@ -1,0 +1,216 @@
+
+(function () {
+  "use strict";
+
+  var LEDGER_SHEET = '💰RAW_수입/지출';
+  var TRADES_SHEET = '📈 RAW_주식내역';
+  var STORAGE_KEY_URL = 'gagyebu_server_url';
+  var STORAGE_KEY_APPKEY = 'gagyebu_app_key';
+
+  // ---------- 비밀 키 ----------
+  // 이 스크립트 안의 모든 fetch는 아래 함수를 거친다. 서버(Code.gs)는 키가 맞을 때만 응답한다.
+  var nativeFetch_ = window.fetch.bind(window);
+  var authPrompted_ = false;
+  function getAppKey_() {
+    try { return localStorage.getItem(STORAGE_KEY_APPKEY) || ''; } catch (e) { return ''; }
+  }
+  function onUnauthorized_() {
+    if (authPrompted_) return;
+    authPrompted_ = true;
+    var modal = document.getElementById('settingsModal');
+    if (!modal) return;
+    document.getElementById('serverUrlInput').value = getServerUrl();
+    document.getElementById('appKeyInput').value = getAppKey_();
+    var st = document.getElementById('settingsStatus');
+    st.className = 'status-text';
+    st.textContent = getAppKey_() ? '비밀 키가 맞지 않아요. 다시 입력해 주세요.' : '비밀 키를 입력해야 데이터를 볼 수 있어요.';
+    modal.classList.add('open');
+  }
+  function fetch(url, opts) {
+    var key = getAppKey_();
+    var u = String(url);
+    if (opts && opts.method === 'POST' && typeof opts.body === 'string') {
+      try {
+        var p = JSON.parse(opts.body);
+        p.key = key;
+        opts = Object.assign({}, opts, { body: JSON.stringify(p) });
+      } catch (e) { /* JSON이 아니면 그대로 보낸다 */ }
+    } else if (key) {
+      u += (u.indexOf('?') >= 0 ? '&' : '?') + 'key=' + encodeURIComponent(key);
+    }
+    return nativeFetch_(u, opts).then(function (res) {
+      try {
+        res.clone().json().then(function (d) { if (d && d.error === 'unauthorized') onUnauthorized_(); }).catch(function () {});
+      } catch (e) { /* 응답을 복제할 수 없으면 건너뛴다 */ }
+      return res;
+    });
+  }
+  function checkKeyStatus_() {
+    var url = getServerUrl();
+    if (!url) return;
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    fetch(url + sep + 'action=authStatus').then(function (r) { return r.json(); }).then(function (d) {
+      var el = document.getElementById('keyWarn');
+      if (!el || !d) return;
+      el.style.display = d.keySet === false ? '' : 'none';
+    }).catch(function () {});
+  }
+  var COLORS = {
+    income: '#3b82f6', expense: '#ef4444', saving: '#10b981', invest: '#f59e0b', rest: '#e5e7eb'
+  };
+  var PALETTE = ['#6366f1','#ef4444','#f59e0b','#10b981','#3b82f6','#a855f7','#ec4899','#14b8a6','#f97316','#84cc16','#0ea5e9','#eab308'];
+
+  var state = {
+    rows: [],
+    filteredUser: '전체',
+    filteredMonth: '전체',
+    visibleCount: 30,
+    ratio: { user: '전체', from: null, to: null },
+    expense: { user: '전체', month: null, level: 'main' },
+    allowance: { from: null, to: null },
+    allMonths: [],
+    trades: { rows: [], prices: [] },
+    tradeUI: { account: null, granularity: 'week', allocationMode: 'name' },
+    tradeChart: null, tradePeriodChart: null, tradeCumChart: null,
+    tradePnlByStockChart: null, tradeAllocationChart: null,
+    assets: { master: [], snapshots: [] },
+    assetUI: { mode: 'cumulative' },
+    goals: { investPct: 0, savingsPct: 0 },
+    vehicle: { mileage: [], month: null }
+  };
+
+  // ---------- 유틸 ----------
+  function won(n) {
+    var num = Number(n) || 0;
+    var sign = num < 0 ? '-' : '';
+    return sign + '₩' + Math.abs(Math.round(num)).toLocaleString('ko-KR');
+  }
+  function pct(n) {
+    return (Math.round((Number(n) || 0) * 1000) / 10) + '%';
+  }
+
+  // ---------- 차트 위에 값 직접 표시 ----------
+  // 외부 플러그인(chartjs-plugin-datalabels)을 추가로 CDN에서 불러오면 로딩 실패 지점이
+  // 또 하나 늘어나므로(방금 Chart.js 자체 로딩 안정성을 고친 참이라), 별도 라이브러리 없이
+  // 막대/점 위에 값을 직접 그려주는 아주 작은 커스텀 플러그인을 만들어 쓴다.
+  function makeValueLabelPlugin_(formatter) {
+    return {
+      id: 'valueLabelPlugin',
+      afterDatasetsDraw: function (chart) {
+        var ctx = chart.ctx;
+        chart.data.datasets.forEach(function (dataset, dsIndex) {
+          var meta = chart.getDatasetMeta(dsIndex);
+          if (!meta || meta.hidden) return;
+          meta.data.forEach(function (el, i) {
+            var raw = dataset.data[i];
+            if (raw === null || raw === undefined) return;
+            var text = formatter(raw);
+            var isBar = typeof el.base === 'number';
+            var y = isBar ? (raw >= 0 ? el.y - 6 : el.y + 14) : el.y - 10;
+            ctx.save();
+            ctx.fillStyle = '#1f2430';
+            ctx.font = "600 10px -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif";
+            ctx.textAlign = 'center';
+            ctx.fillText(text, el.x, y);
+            ctx.restore();
+          });
+        });
+      }
+    };
+  }
+
+  // ---------- 차트 렌더링 방어 코드 ----------
+  // Chart.js가 (네트워크 문제 등으로) 아예 로드되지 않았거나 new Chart() 생성 중 예외가
+  // 나면, 예전에는 캔버스가 조용히 텅 빈 채로 남았다(KPI 등 다른 값은 정상 표시되는데
+  // 차트만 아무 안내도 없이 비어 보이는 원인). 이제는 canvas를 숨기고 emptyEl에 명확한
+  // 안내 문구를 보여준다.
+  function safeNewChart_(canvas, emptyEl, config, fallbackMessage) {
+    if (typeof Chart === 'undefined' || window.__chartLoadFailed) {
+      canvas.style.display = 'none';
+      emptyEl.style.display = 'block';
+      emptyEl.textContent = '⚠ 차트 라이브러리를 불러오지 못했어요(네트워크 문제일 수 있어요). 새로고침을 눌러 다시 시도해보세요.';
+      return null;
+    }
+    try {
+      canvas.style.display = '';
+      emptyEl.style.display = 'none';
+      return new Chart(canvas.getContext('2d'), config);
+    } catch (e) {
+      console.error('차트 생성 실패', e);
+      canvas.style.display = 'none';
+      emptyEl.style.display = 'block';
+      emptyEl.textContent = fallbackMessage || ('⚠ 차트를 그리지 못했어요: ' + ((e && e.message) || e));
+      return null;
+    }
+  }
+  function getServerUrl() {
+    var saved = localStorage.getItem(STORAGE_KEY_URL);
+    if (saved) return saved;
+    // Apps Script가 이 페이지 자체를 서빙하는 경우(모바일 접속용) 자동으로 자기 자신의 URL을 사용
+    if (window.__SELF_URL) return window.__SELF_URL;
+    return '';
+  }
+  function parseAmount(v) {
+    if (v === undefined || v === null || v === '') return 0;
+    if (typeof v === 'number') return v;
+    var cleaned = String(v).replace(/[₩,\s]/g, '');
+    var n = parseFloat(cleaned);
+    return isNaN(n) ? 0 : n;
+  }
+  function prevMonthOf(m) {
+    if (!m) return null;
+    var parts = m.split('.');
+    var y = parseInt(parts[0], 10), mo = parseInt(parts[1], 10);
+    if (isNaN(y) || isNaN(mo)) return null;
+    mo -= 1;
+    if (mo === 0) { mo = 12; y -= 1; }
+    return y + '.' + (mo < 10 ? '0' + mo : '' + mo);
+  }
+
+  // ---------- 데이터 로드 ----------
+  function loadSeedData() {
+    try {
+      var raw = document.getElementById('seed-data').textContent;
+      return JSON.parse(raw);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ---------- 네트워크 재시도 + 마지막 성공 데이터 캐시 ----------
+  // 모바일에서는 와이파이/LTE 전환 등으로 fetch가 일시적으로 실패하는 경우가 많다.
+  // 한 번 실패했다고 바로 "연동 안됨"으로 보여주지 않고 짧은 지연을 두고 몇 번 더
+  // 시도하며, 그래도 안 되면 하드코딩된 예시 데이터 대신 마지막으로 성공했던
+  // 실제 데이터(localStorage 캐시)를 보여줘서 화면이 덜 갑작스럽게 바뀌도록 한다.
+  function delay_(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+  function withRetry_(taskFn, attempts) {
+    attempts = attempts || 3;
+    function attempt(n) {
+      return taskFn().catch(function (err) {
+        if (n >= attempts) throw err;
+        return delay_(500 * n).then(function () { return attempt(n + 1); });
+      });
+    }
+    return attempt(1);
+  }
+  function cacheSet_(key, value) {
+    try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), v: value })); } catch (e) { /* 저장 공간 부족 등은 무시 */ }
+  }
+  function cacheGet_(key) {
+    try {
+      var raw = localStorage.getItem(key);
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      return obj ? obj.v : null;
+    } catch (e) { return null; }
+  }
+
+  function fetchLiveData() {
+    var url = getServerUrl();
+    if (!url) return Promise.resolve({ rows: null });
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    var fullUrl = url + sep + 'action=list&sheet=' + encodeURIComponent(LEDGER_SHEET);
+    return withRetry_(function () {
+      return fetch(fullUrl).then(function (res) {

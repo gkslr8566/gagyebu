@@ -1,0 +1,191 @@
+  function defaultPrevYearMonth_() {
+    var d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() - 1);
+    var y = d.getFullYear();
+    var m = d.getMonth() + 1;
+    return y + '-' + (m < 10 ? '0' + m : m);
+  }
+
+  function submitVehicleMileage(ev) {
+    ev.preventDefault();
+    var form = document.getElementById('vehicleForm');
+    var statusEl = document.getElementById('vehicleFormStatus');
+    var url = getServerUrl();
+
+    // <input type="month">은 항상 "2026-09"(하이픈) 형식을 주는데, 이 앱의 다른 시트들은
+    // 전부 "2026.09"(점) 형식으로 연월을 저장하므로, 저장 전에 형식을 맞춰준다.
+    var yearMonth = (form.yearMonth.value || '').replace('-', '.');
+    var km = Number(form.km.value) || 0;
+
+    if (!url) {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 시트 연동이 설정되지 않아 저장할 수 없습니다. 상단 "시트 연동 설정"에서 URL을 등록하세요.';
+      return;
+    }
+    if (!yearMonth) {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 연월을 선택해주세요.';
+      return;
+    }
+
+    statusEl.className = 'status-text';
+    statusEl.textContent = '저장 중...';
+    document.getElementById('submitVehicleBtn').disabled = true;
+
+    fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'addVehicleMileage', entry: { yearMonth: yearMonth, km: km } })
+    }).then(function (res) { return res.json(); })
+      .then(function (data) {
+        document.getElementById('submitVehicleBtn').disabled = false;
+        if (data.ok) {
+          statusEl.className = 'status-text status-ok';
+          statusEl.textContent = '✓ 저장 완료!';
+          form.reset();
+          refreshVehicle();
+        } else {
+          statusEl.className = 'status-text status-err';
+          statusEl.textContent = '저장 실패: ' + (data.error || '알 수 없는 오류');
+        }
+      }).catch(function (err) {
+        document.getElementById('submitVehicleBtn').disabled = false;
+        statusEl.className = 'status-text status-err';
+        statusEl.textContent = '저장 실패: ' + err;
+      });
+  }
+
+  // ---------- 분류 파싱 ----------
+  function parseRow(row) {
+    var type = (row['수입/지출'] || '').toString().trim();
+    var main = (row['대분류'] || '').toString().trim();
+    var sub = (row['소분류'] || '').toString().trim();
+
+    // 대분류/소분류가 비어있으면 '분류' 전체 경로("지출 > 차량관리비 > 주차")에서 유추
+    if ((!main || !sub || !type) && row['분류']) {
+      var parts = String(row['분류']).split('>').map(function (s) { return s.trim(); });
+      if (!type && parts[0]) type = parts[0];
+      if (!main && parts[1]) main = parts[1];
+      if (!sub && parts[2]) sub = parts[2];
+    }
+
+    var appliedRaw = row['적용금액'];
+    if (appliedRaw === undefined || appliedRaw === null || appliedRaw === '') appliedRaw = row['금액'];
+
+    return {
+      id: row['ID'],
+      date: row['거래일'],
+      type: type,
+      main: main,
+      sub: sub,
+      applied: parseAmount(appliedRaw),
+      memo: row['내역'] || '',
+      user: (row['사용자'] || '미지정').toString().trim(),
+      payment: row['결제방식'] || '',
+      yearMonth: (row['연월'] || '').toString().trim()
+    };
+  }
+
+  function getFilteredRows() {
+    return state.rows.map(parseRow).filter(function (r) {
+      if (state.filteredUser !== '전체' && r.user !== state.filteredUser) return false;
+      if (state.filteredMonth !== '전체' && r.yearMonth !== state.filteredMonth) return false;
+      return true;
+    });
+  }
+
+  // ---------- 필터 옵션 ----------
+  function normStr(v) {
+    // 시트에서 텍스트처럼 보이는 값(예: "2026.08")이 구글시트에 의해 숫자로 저장된 경우에도
+    // 같은 값으로 취급되도록 항상 문자열로 정규화한다.
+    return (v === undefined || v === null) ? '' : String(v).trim();
+  }
+
+  function populateFilters() {
+    var users = Array.from(new Set(state.rows.map(function (r) { return normStr(r['사용자']); }).filter(Boolean))).sort();
+    var months = Array.from(new Set(state.rows.map(function (r) { return normStr(r['연월']); }).filter(Boolean))).sort();
+
+    var userSel = document.getElementById('userFilter');
+    var prevUser = state.filteredUser;
+    userSel.innerHTML = '<option value="전체">전체 사용자</option>' + users.map(function (u) {
+      return '<option value="' + u + '">' + u + '</option>';
+    }).join('');
+    userSel.value = users.indexOf(prevUser) >= 0 ? prevUser : '전체';
+    state.filteredUser = userSel.value;
+
+    var monthSel = document.getElementById('monthFilter');
+    var prevMonth = state.filteredMonth;
+    monthSel.innerHTML = '<option value="전체">전체 기간</option>' + months.map(function (m) {
+      return '<option value="' + m + '">' + m + '</option>';
+    }).join('');
+    monthSel.value = months.indexOf(prevMonth) >= 0 ? prevMonth : '전체';
+    state.filteredMonth = monthSel.value;
+
+    // 입력 폼용 사용자 옵션
+    var formUserSel = document.getElementById('userSelect');
+    formUserSel.innerHTML = users.map(function (u) { return '<option value="' + u + '">' + u + '</option>'; }).join('');
+
+    // 계좌 등록 폼의 소유자 옵션(가계부의 "사용자" 목록과 동일하게 재사용, 현금성 계좌용 빈 선택지 포함)
+    var assetOwnerSel = document.getElementById('assetOwnerSelect');
+    if (assetOwnerSel) {
+      assetOwnerSel.innerHTML = '<option value="">-</option>' + users.map(function (u) { return '<option value="' + u + '">' + u + '</option>'; }).join('');
+    }
+
+    var payments = Array.from(new Set(state.rows.map(function (r) { return normStr(r['결제방식']); }).filter(Boolean))).sort();
+    var formPaySel = document.getElementById('paymentSelect');
+    formPaySel.innerHTML = '<option value="">-</option>' + payments.map(function (p) { return '<option value="' + p + '">' + p + '</option>'; }).join('');
+
+    var userOptionsHtml = '<option value="전체">전체 사용자</option>' + users.map(function (u) { return '<option value="' + u + '">' + u + '</option>'; }).join('');
+    var monthOptionsHtml = months.map(function (m) { return '<option value="' + m + '">' + m + '</option>'; }).join('');
+
+    // 카드1: 수입 대비 비중 필터
+    var ratioUserSel = document.getElementById('ratioUserFilter');
+    ratioUserSel.innerHTML = userOptionsHtml;
+    ratioUserSel.value = users.indexOf(state.ratio.user) >= 0 ? state.ratio.user : '전체';
+    state.ratio.user = ratioUserSel.value;
+
+    var ratioFromSel = document.getElementById('ratioFromMonth');
+    var ratioToSel = document.getElementById('ratioToMonth');
+    ratioFromSel.innerHTML = monthOptionsHtml;
+    ratioToSel.innerHTML = monthOptionsHtml;
+    if (!state.ratio.from || months.indexOf(state.ratio.from) < 0) state.ratio.from = months[0] || null;
+    if (!state.ratio.to || months.indexOf(state.ratio.to) < 0) state.ratio.to = months[months.length - 1] || null;
+    if (state.ratio.from) ratioFromSel.value = state.ratio.from;
+    if (state.ratio.to) ratioToSel.value = state.ratio.to;
+
+    // 카드2: 지출 대분류별 비중 필터
+    var expUserSel = document.getElementById('expenseUserFilter');
+    expUserSel.innerHTML = userOptionsHtml;
+    expUserSel.value = users.indexOf(state.expense.user) >= 0 ? state.expense.user : '전체';
+    state.expense.user = expUserSel.value;
+
+    var expMonthSel = document.getElementById('expenseMonthFilter');
+    expMonthSel.innerHTML = monthOptionsHtml;
+    if (!state.expense.month || months.indexOf(state.expense.month) < 0) state.expense.month = months[months.length - 1] || null;
+    if (state.expense.month) expMonthSel.value = state.expense.month;
+
+    // 정훈 용돈 탭 기간 필터
+    state.allMonths = months;
+    var allowFromSel = document.getElementById('allowanceFromMonth');
+    var allowToSel = document.getElementById('allowanceToMonth');
+    allowFromSel.innerHTML = monthOptionsHtml;
+    allowToSel.innerHTML = monthOptionsHtml;
+    if (!state.allowance.from || months.indexOf(state.allowance.from) < 0) state.allowance.from = months[0] || null;
+    if (!state.allowance.to || months.indexOf(state.allowance.to) < 0) state.allowance.to = months[months.length - 1] || null;
+    if (state.allowance.from) allowFromSel.value = state.allowance.from;
+    if (state.allowance.to) allowToSel.value = state.allowance.to;
+  }
+
+  // ---------- 렌더 ----------
+  function render() {
+    var rows = getFilteredRows();
+
+    var income = 0, expense = 0, saving = 0, invest = 0;
+    rows.forEach(function (r) {
+      if (r.type === '수입') income += r.applied;
+      else if (r.type === '지출') expense += r.applied;
+      else if (r.type === '저축') saving += r.applied;
+      else if (r.type === '투자') invest += r.applied;
+    });
+    var net = income - expense - saving - invest;
+

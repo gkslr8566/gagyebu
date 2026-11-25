@@ -1,0 +1,205 @@
+      '청약': buildDeltaSeries_(typeSeries['청약'], savingsBaselineByType['청약']),
+      'CMA': buildDeltaSeries_(typeSeries['CMA'], savingsBaselineByType['CMA']),
+      '투자': buildDeltaSeries_(typeSeries['투자'], 0)
+    };
+    var totalBaseline = cashStartBalance + savingsBaselineByType['적금'] + savingsBaselineByType['청약'] + savingsBaselineByType['CMA'];
+    var deltaTotalSeries = buildDeltaSeries_(totalSeries, totalBaseline);
+
+    return {
+      months: months, latestMonth: latestMonth,
+      savingsSeries: savingsSeries, savingsAccounts: savingsAccounts,
+      accountList: accountList,
+      typeSeries: typeSeries, totalSeries: totalSeries,
+      deltaTypeSeries: deltaTypeSeries, deltaTotalSeries: deltaTotalSeries,
+      kpi: { total: totalNow, cash: cashNow, savingsOnly: savingsOnlyNow, subscription: subscriptionNow, cma: cmaNow, invest: investLiveTotal },
+      unclassified: unclassified
+    };
+  }
+
+  function renderAssetsTab() {
+    var listBody = document.getElementById('assetListTableBody');
+    if (!listBody) return; // 아직 DOM이 준비되지 않음
+
+    var calc = computeAssetState();
+
+    document.getElementById('assetAsOfHint').textContent = calc.latestMonth ? (calc.latestMonth + ' 기준') : '';
+    document.getElementById('assetKpiTotal').textContent = won(calc.kpi.total);
+    document.getElementById('assetKpiCash').textContent = won(calc.kpi.cash);
+    document.getElementById('assetKpiCma').textContent = won(calc.kpi.cma);
+    document.getElementById('assetKpiSavingsOnly').textContent = won(calc.kpi.savingsOnly);
+    document.getElementById('assetKpiSubscription').textContent = won(calc.kpi.subscription);
+    document.getElementById('assetKpiInvest').textContent = won(calc.kpi.invest);
+
+    var emptyEl = document.getElementById('assetListEmpty');
+    if (!calc.accountList.length) {
+      listBody.innerHTML = '';
+      emptyEl.style.display = 'block';
+    } else {
+      emptyEl.style.display = 'none';
+      listBody.innerHTML = calc.accountList.map(function (a) {
+        return '<tr>' +
+          '<td>' + a.name + '</td>' +
+          '<td><span class="tag">' + a.type + '</span></td>' +
+          '<td>' + (a.owner || '-') + '</td>' +
+          '<td style="text-align:right;">' + won(a.balance) + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    var warnEl = document.getElementById('assetUnclassifiedHint');
+    if (calc.unclassified.amount) {
+      warnEl.style.display = 'block';
+      warnEl.style.color = 'var(--expense)';
+      warnEl.textContent = '⚠ 어느 계좌인지 매칭하지 못한 저축/출금 내역이 ' + won(calc.unclassified.amount) + '만큼 있어요(' + calc.unclassified.items.length + '건). 계좌 마스터에 해당 계좌를 등록하거나 출금 매칭 키워드를 확인해보세요.';
+    } else {
+      warnEl.style.display = 'none';
+    }
+
+    try { renderGoalDetail_(); } catch (e) { console.error('1억 상세 오류', e); }
+    try { renderAccountTrend_(calc); } catch (e2) { console.error('계좌 추이 오류', e2); }
+    renderAssetTotalChart_(calc);
+    renderAssetTypeChart_(calc);
+    renderHomeTab_();
+  }
+
+
+
+  function submitAssetAccount(ev) {
+    ev.preventDefault();
+    var form = document.getElementById('assetForm');
+    var statusEl = document.getElementById('assetFormStatus');
+    var url = getServerUrl();
+
+    var entry = {
+      name: form.name.value,
+      type: form.type.value,
+      owner: form.owner.value,
+      startBalance: Number(form.startBalance.value) || 0,
+      withdrawKeyword: form.withdrawKeyword.value,
+      note: form.note.value
+    };
+
+    if (!url) {
+      statusEl.className = 'status-text status-err';
+      statusEl.textContent = '⚠ 시트 연동이 설정되지 않아 저장할 수 없습니다. 상단 "시트 연동 설정"에서 URL을 등록하세요.';
+      return;
+    }
+
+    statusEl.className = 'status-text';
+    statusEl.textContent = '저장 중...';
+    document.getElementById('submitAssetBtn').disabled = true;
+
+    fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'addAssetAccount', entry: entry })
+    }).then(function (res) { return res.json(); })
+      .then(function (data) {
+        document.getElementById('submitAssetBtn').disabled = false;
+        if (data.ok) {
+          statusEl.className = 'status-text status-ok';
+          statusEl.textContent = '✓ 저장 완료! 목록을 새로고침합니다.';
+          form.reset();
+          refreshAssets();
+        } else {
+          statusEl.className = 'status-text status-err';
+          statusEl.textContent = '저장 실패: ' + (data.error || '알 수 없는 오류');
+        }
+      }).catch(function (err) {
+        document.getElementById('submitAssetBtn').disabled = false;
+        statusEl.className = 'status-text status-err';
+        statusEl.textContent = '저장 실패: ' + err;
+      });
+  }
+
+  // ---------- 목표(소득 대비 투자/저축 비중 목표 + 예산 + 미래 자산 예측) ----------
+  var GOALS_SHEET = '⚙️설정_목표';
+
+  function refreshGoals() {
+    var url = getServerUrl();
+    if (!url) { renderGoalsTab(); return; }
+    fetchSheetList_(GOALS_SHEET).then(function (result) {
+      var rows = result.rows || [];
+      var investPct = 0, savingsPct = 0;
+      rows.forEach(function (r) {
+        var item = normStr(r['항목']);
+        var val = parseAmount(r['목표비율(%)']);
+        if (item === '투자') investPct = val;
+        if (item === '저축') savingsPct = val;
+      });
+      state.goals = { investPct: investPct, savingsPct: savingsPct };
+      renderGoalsTab();
+    });
+  }
+
+  /**
+   * 이번 달(가장 최근 연월) 수입을 기준으로, 저장된 목표 비중을 적용해서
+   * 목표 투자/저축액과 "그러고 남은 소비 예산"을 계산한다. 미래 자산 예측은
+   * 이 월 목표 기여금(투자+저축 목표액)을 그대로 12/60/120개월 쌓는 단순 누적 방식.
+   */
+  function computeGoalsState() {
+    var months = (state.allMonths || []).slice().sort();
+    var latestMonth = months[months.length - 1] || null;
+
+    var income = 0, expense = 0, saving = 0, invest = 0;
+    (state.rows || []).map(parseRow).forEach(function (r) {
+      if (!latestMonth || r.yearMonth !== latestMonth) return;
+      if (r.type === '수입') income += r.applied;
+      else if (r.type === '지출') expense += r.applied;
+      else if (r.type === '저축') saving += r.applied;
+      else if (r.type === '투자') invest += r.applied;
+    });
+
+    var investPct = (state.goals && state.goals.investPct) || 0;
+    var savingsPct = (state.goals && state.goals.savingsPct) || 0;
+    var spendPct = Math.max(0, 100 - investPct - savingsPct);
+
+    var targetInvest = income * investPct / 100;
+    var targetSaving = income * savingsPct / 100;
+    var targetSpend = income * spendPct / 100;
+
+    var currentTotal = 0;
+    try { currentTotal = computeAssetState().kpi.total; } catch (e) { currentTotal = 0; }
+    var monthlyContribution = targetInvest + targetSaving;
+
+    return {
+      latestMonth: latestMonth,
+      income: income, expense: expense, saving: saving, invest: invest,
+      investPct: investPct, savingsPct: savingsPct, spendPct: spendPct,
+      targetInvest: targetInvest, targetSaving: targetSaving, targetSpend: targetSpend,
+      remainingBudget: targetSpend - expense,
+      currentTotal: currentTotal,
+      monthlyContribution: monthlyContribution,
+      projection: {
+        y1: currentTotal + monthlyContribution * 12,
+        y5: currentTotal + monthlyContribution * 60,
+        y10: currentTotal + monthlyContribution * 120
+      }
+    };
+  }
+
+  function setGoalProgressBar_(id, actual, target, goodWhenHigher) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var pctVal = target > 0 ? Math.min(100, Math.max(0, actual / target * 100)) : (actual > 0 ? 100 : 0);
+    el.style.width = pctVal + '%';
+    var isGood = goodWhenHigher ? (actual >= target) : (actual <= target);
+    el.style.background = isGood ? 'var(--saving)' : 'var(--expense)';
+  }
+
+  function renderGoalsTab() {
+    var incomeEl = document.getElementById('goalIncomeValue');
+    if (!incomeEl) return; // 아직 DOM이 준비되지 않음
+
+    var g = computeGoalsState();
+
+    if (!(document.activeElement && document.activeElement.id === 'goalInvestPctInput')) {
+      document.getElementById('goalInvestPctInput').value = g.investPct || '';
+    }
+    if (!(document.activeElement && document.activeElement.id === 'goalSavingsPctInput')) {
+      document.getElementById('goalSavingsPctInput').value = g.savingsPct || '';
+    }
+    document.getElementById('goalSpendPctHint').textContent = '소비 비중은 자동 계산돼요: ' + pct(g.spendPct / 100) + ' (100% − 투자 − 저축)';
+
+    document.getElementById('goalMonthHint').textContent = g.latestMonth ? ('(' + g.latestMonth + ' 기준)') : '(데이터 없음)';
+    incomeEl.textContent = won(g.income);
+

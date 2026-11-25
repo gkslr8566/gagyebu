@@ -1,0 +1,160 @@
+    document.getElementById('tradeAccountFilter').addEventListener('change', function (e) {
+      state.tradeUI.account = e.target.value; renderTradesTab();
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#tradeGranularityToggle .seg-btn'), function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(document.querySelectorAll('#tradeGranularityToggle .seg-btn'), function (b) {
+          b.classList.remove('active');
+        });
+        btn.classList.add('active');
+        state.tradeUI.granularity = btn.getAttribute('data-gran');
+        renderTradesTab();
+      });
+    });
+    var tradeAllocationToggleEl = document.getElementById('tradeAllocationToggle');
+    if (tradeAllocationToggleEl) {
+      Array.prototype.forEach.call(tradeAllocationToggleEl.querySelectorAll('.seg-btn'), function (btn) {
+        btn.addEventListener('click', function () {
+          Array.prototype.forEach.call(tradeAllocationToggleEl.querySelectorAll('.seg-btn'), function (b) {
+            b.classList.remove('active');
+          });
+          btn.classList.add('active');
+          state.tradeUI.allocationMode = btn.getAttribute('data-mode');
+          renderTradesTab();
+        });
+      });
+    }
+    var assetModeToggleEl = document.getElementById('assetModeToggle');
+    if (assetModeToggleEl) {
+      Array.prototype.forEach.call(assetModeToggleEl.querySelectorAll('.seg-btn'), function (btn) {
+        btn.addEventListener('click', function () {
+          Array.prototype.forEach.call(assetModeToggleEl.querySelectorAll('.seg-btn'), function (b) {
+            b.classList.remove('active');
+          });
+          btn.classList.add('active');
+          state.assetUI.mode = btn.getAttribute('data-mode');
+          renderAssetsTab();
+        });
+      });
+    }
+    document.getElementById('toggleTradeFormBtn').addEventListener('click', function () {
+      var form = document.getElementById('tradeForm');
+      form.style.display = (form.style.display === 'none') ? 'grid' : 'none';
+    });
+    document.getElementById('cancelTradeFormBtn').addEventListener('click', function () {
+      document.getElementById('tradeForm').style.display = 'none';
+    });
+    document.getElementById('tradeForm').addEventListener('submit', submitTrade);
+
+    document.getElementById('exportTradeSummaryBtn').addEventListener('click', openTradeSummaryModal_);
+    document.getElementById('closeTradeSummaryBtn').addEventListener('click', function () {
+      document.getElementById('tradeSummaryModal').classList.remove('open');
+    });
+    document.getElementById('copyTradeSummaryBtn').addEventListener('click', copyTradeSummaryToClipboard_);
+
+    // 종목명 입력 시, 과거에 같은 종목명으로 입력했던 종목코드/섹터가 있으면 자동으로 채워준다.
+    // 사용자가 직접 수정한 값은 덮어쓰지 않도록, 마지막으로 "자동으로 채운 값"을 기억해두고
+    // 그 값 그대로일 때만(=아직 손으로 안 고쳤을 때만) 다시 채운다.
+    document.getElementById('tradeNameInput').addEventListener('input', function () {
+      var info = (state.tradeUI.nameInfo || {})[this.value];
+      if (!info) return;
+      var codeEl = document.getElementById('tradeCodeInput');
+      var sectorEl = document.getElementById('tradeSectorInput');
+      if (codeEl && info.code && (!codeEl.value || codeEl.value === codeEl.dataset.autofilled)) {
+        codeEl.value = info.code;
+        codeEl.dataset.autofilled = info.code;
+      }
+      if (sectorEl && info.sector && (!sectorEl.value || sectorEl.value === sectorEl.dataset.autofilled)) {
+        sectorEl.value = info.sector;
+        sectorEl.dataset.autofilled = info.sector;
+      }
+    });
+
+    document.getElementById('toggleAssetFormBtn').addEventListener('click', function () {
+      var form = document.getElementById('assetForm');
+      form.style.display = (form.style.display === 'none') ? 'grid' : 'none';
+    });
+    document.getElementById('cancelAssetFormBtn').addEventListener('click', function () {
+      document.getElementById('assetForm').style.display = 'none';
+    });
+    document.getElementById('assetForm').addEventListener('submit', submitAssetAccount);
+
+    document.getElementById('goalForm').addEventListener('submit', submitGoals);
+
+    document.getElementById('vehicleMonthFilter').addEventListener('change', function (e) {
+      state.vehicle.month = e.target.value; renderVehicleTab();
+    });
+    document.getElementById('toggleVehicleFormBtn').addEventListener('click', function () {
+      var form = document.getElementById('vehicleForm');
+      var isHidden = form.style.display === 'none' || !form.style.display;
+      form.style.display = isHidden ? 'grid' : 'none';
+      if (isHidden) {
+        var ymInput = document.getElementById('vehicleYearMonthInput');
+        if (!ymInput.value) ymInput.value = defaultPrevYearMonth_();
+      }
+    });
+    document.getElementById('cancelVehicleFormBtn').addEventListener('click', function () {
+      document.getElementById('vehicleForm').style.display = 'none';
+    });
+    document.getElementById('vehicleForm').addEventListener('submit', submitVehicleMileage);
+
+    document.getElementById('settingsBtn').addEventListener('click', function () {
+      document.getElementById('serverUrlInput').value = getServerUrl();
+      document.getElementById('appKeyInput').value = getAppKey_();
+      document.getElementById('settingsStatus').textContent = '';
+      document.getElementById('settingsModal').classList.add('open');
+    });
+    document.getElementById('closeSettingsBtn').addEventListener('click', function () {
+      document.getElementById('settingsModal').classList.remove('open');
+    });
+    document.getElementById('saveSettingsBtn').addEventListener('click', function () {
+      var val = document.getElementById('serverUrlInput').value.trim();
+      localStorage.setItem(STORAGE_KEY_URL, val);
+      try { localStorage.setItem(STORAGE_KEY_APPKEY, document.getElementById('appKeyInput').value.trim()); } catch (e) { /* 저장 실패는 무시 */ }
+      authPrompted_ = false;
+      document.getElementById('settingsStatus').className = 'status-text status-ok';
+      document.getElementById('settingsStatus').textContent = '저장했습니다. 연결을 시도합니다...';
+      fetchMetaAndFillCategories();
+      refreshAll();
+      refreshTrades();
+      refreshAssets();
+      refreshGoals();
+      refreshVehicle();
+      loadBoard_();
+      checkKeyStatus_();
+      setTimeout(function () { document.getElementById('settingsModal').classList.remove('open'); }, 600);
+    });
+
+    document.getElementById('toggleFormBtn').addEventListener('click', function () {
+      var form = document.getElementById('entryForm');
+      var isHidden = form.style.display === 'none';
+      form.style.display = isHidden ? 'grid' : 'none';
+      if (isHidden) updateCategoryOptions();
+    });
+    document.getElementById('cancelFormBtn').addEventListener('click', function () {
+      document.getElementById('entryForm').style.display = 'none';
+    });
+    document.getElementById('typeSelect').addEventListener('change', updateCategoryOptions);
+    document.getElementById('entryForm').addEventListener('submit', submitEntry);
+  }
+
+  // ---------- 홈 보드 (위젯 대시보드) ----------
+  // 첫 화면에 보여줄 위젯을 고르고 순서·크기를 바꿀 수 있다. 설정은 시트의 "⚙️설정_대시보드"에
+  // 저장돼서 휴대폰·컴퓨터 어디서 열어도 같은 보드가 보인다.
+  // 보증금·차입금 같은 실제 금액은 이 파일에 두지 않고 Code.gs에서 받아온다(마지막으로 받은 값은 이 기기에 저장).
+  var HOME_CONFIG = cacheGet_('cache_home_config') || { loaded: false, goalTarget: 100000000, goalExcludeKeywords: [], deposit: 0, essentialLimit: 0, debts: [] };
+  var HOME_NEEDS_CONFIG = { goal: 1, networth: 1, nwcompose: 1, nwtrend: 1, sim: 1 };
+  var HOME_WIDGETS = [
+    { id: 'goal', title: '1억 목표', size: 'half', on: true },
+    { id: 'networth', title: '순자산', size: 'half', on: true },
+    { id: 'spend', title: '지출 관리', size: 'full', on: true },
+    { id: 'rate', title: '저축률 · 투자율', size: 'full', on: true },
+    { id: 'flowbar', title: '수입 배분', size: 'full', on: true },
+    { id: 'catdelta', title: '평소보다 많이 쓴 곳', size: 'half', on: true },
+    { id: 'invcards', title: '투자 계좌', size: 'half', on: true },
+    { id: 'leftover', title: '월별 남은 금액', size: 'full', on: true },
+    { id: 'sankey', title: '돈의 흐름', size: 'full', on: false },
+    { id: 'card', title: '결제수단별 지출', size: 'half', on: false },
+    { id: 'heat', title: '날짜별 지출', size: 'half', on: false },
+    { id: 'nwcompose', title: '순자산 구성', size: 'half', on: false },
+    { id: 'nwtrend', title: '월별 순자산', size: 'full', on: false },

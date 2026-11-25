@@ -1,0 +1,178 @@
+        var soldQty = -r.qtySigned;
+        realizedPnl = (r.price - avgCost) * soldQty * r.rate;
+        st.qty += r.qtySigned;
+        st.cost -= avgCost * soldQty;
+        // 보유기간: 매도 시점의 "가중평균 매수일"을 기준으로 계산(평단가와 같은 방식으로,
+        // 매도해도 남은 수량의 평균 매수일 자체는 바뀌지 않는다고 가정).
+        r.holdingDays = (st.avgDateMs && tradeMs) ? (tradeMs - st.avgDateMs) / 86400000 : null;
+      } else {
+        avgCost = r.price;
+        realizedPnl = 0;
+        var oldQty = st.qty;
+        var newQty = oldQty + r.qtySigned;
+        if (tradeMs) {
+          st.avgDateMs = (!st.avgDateMs || oldQty <= 0.0001)
+            ? tradeMs
+            : (st.avgDateMs * oldQty + tradeMs * r.qtySigned) / newQty;
+        }
+        st.qty = newQty;
+        st.cost += r.qtySigned * r.price;
+        r.holdingDays = null;
+      }
+
+      r.avgCost = avgCost;
+      r.realizedPnl = realizedPnl;
+      if (r.code) st.code = r.code;
+      if (r.sector) st.sector = r.sector;
+    });
+
+    return { rows: rows, holdings: holdings };
+  }
+
+  function getTradePriceMap_() {
+    var map = {};
+    (state.trades.prices || []).forEach(function (p) {
+      var key = normStr(p.account) + '||' + normStr(p.name);
+      map[key] = Number(p.currentPrice) || 0;
+    });
+    return map;
+  }
+
+  function bucketKeyForDate_(dateStr, granularity) {
+    if (!dateStr) return null;
+    // 매매일이 이제 "yyyy-MM-ddTHH:mm:ss"처럼 시간까지 포함할 수 있어서, 일/월 단위로
+    // 묶을 때는 날짜 부분(앞 10자)만 사용해야 같은 날 여러 건이 하나의 구간으로 묶인다.
+    var datePart = dateStr.slice(0, 10);
+    if (granularity === 'day') return datePart;
+    if (granularity === 'month') return datePart.slice(0, 7);
+    var d = new Date(datePart + 'T00:00:00');
+    if (isNaN(d.getTime())) return datePart;
+    var day = d.getDay();
+    var diffToMonday = (day === 0 ? -6 : 1 - day);
+    var monday = new Date(d);
+    monday.setDate(d.getDate() + diffToMonday);
+    var y = monday.getFullYear(), m = monday.getMonth() + 1, dd = monday.getDate();
+    return y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+  }
+
+  function renderTradesTab() {
+    var calc = computeTradeState(state.trades.rows);
+    try { renderTradeOverview_(); } catch (e) { console.error('투자 요약 오류', e); }
+    var accounts = Array.from(new Set(calc.rows.map(function (r) { return r.account; }).filter(Boolean))).sort();
+
+    var accSel = document.getElementById('tradeAccountFilter');
+    var prevAccount = state.tradeUI.account;
+    accSel.innerHTML = accounts.map(function (a) { return '<option value="' + a + '">' + a + '</option>'; }).join('');
+    if (!prevAccount || accounts.indexOf(prevAccount) < 0) prevAccount = accounts[0] || null;
+    state.tradeUI.account = prevAccount;
+    if (prevAccount) accSel.value = prevAccount;
+
+    document.getElementById('tradeAccountList').innerHTML = accounts.map(function (a) { return '<option value="' + a + '">'; }).join('');
+    var names = Array.from(new Set(calc.rows.map(function (r) { return r.name; }).filter(Boolean))).sort();
+    document.getElementById('tradeNameList').innerHTML = names.map(function (n) { return '<option value="' + n + '">'; }).join('');
+
+    // 종목명 -> {code, sector} 매핑. 과거에 입력된 값 중 가장 최근(마지막) 것을 사용해서,
+    // 새 매매 입력 폼에서 종목명을 입력하면 종목코드/섹터를 자동으로 채워준다.
+    var nameInfo = {};
+    calc.rows.forEach(function (r) {
+      if (!r.name) return;
+      if (!nameInfo[r.name]) nameInfo[r.name] = {};
+      if (r.code) nameInfo[r.name].code = r.code;
+      if (r.sector) nameInfo[r.name].sector = r.sector;
+    });
+    state.tradeUI.nameInfo = nameInfo;
+
+    var noAccountEl = document.getElementById('tradeNoAccountEmpty');
+    var contentEl = document.getElementById('tradeContent');
+    if (!accounts.length) {
+      noAccountEl.style.display = 'block';
+      contentEl.style.display = 'none';
+      return;
+    }
+    noAccountEl.style.display = 'none';
+    contentEl.style.display = '';
+
+    var account = state.tradeUI.account;
+    var accountRows = calc.rows.filter(function (r) { return r.account === account; });
+
+    var realizedTotal = accountRows.reduce(function (s, r) { return s + (r.realizedPnl || 0); }, 0);
+
+    var priceMap = getTradePriceMap_();
+    var holdingsList = Object.keys(calc.holdings)
+      .map(function (k) { return calc.holdings[k]; })
+      .filter(function (h) { return h.account === account && h.qty > 0.0001; });
+
+    var totalInvested = 0, totalValuation = 0;
+    var holdingsRendered = holdingsList.map(function (h) {
+      var avgCost = h.qty > 0 ? h.cost / h.qty : 0;
+      var priceKey = h.account + '||' + h.name;
+      var currentPrice = priceMap[priceKey];
+      var hasPrice = currentPrice !== undefined && currentPrice > 0;
+      var valuation = hasPrice ? h.qty * currentPrice : h.cost;
+      var pnl = valuation - h.cost;
+      var ret = h.cost ? pnl / h.cost : 0;
+      totalInvested += h.cost;
+      totalValuation += valuation;
+      return { name: h.name, sector: h.sector || '미분류', qty: h.qty, avgCost: avgCost, currentPrice: hasPrice ? currentPrice : null, valuation: valuation, pnl: pnl, ret: ret };
+    }).sort(function (a, b) { return b.valuation - a.valuation; });
+
+    var totalReturn = totalInvested ? (totalValuation - totalInvested) / totalInvested : 0;
+
+    document.getElementById('tradeKpiRealized').textContent = won(realizedTotal);
+    document.getElementById('tradeKpiValuation').textContent = won(totalValuation);
+    document.getElementById('tradeKpiInvested').textContent = won(totalInvested);
+    document.getElementById('tradeKpiReturn').textContent = totalInvested ? pct(totalReturn) : '-';
+
+    // 평균 보유기간: 매도가 이뤄진 건들의 보유일수(가중평균 매수일 기준)를 단순 평균
+    var holdingDaysList = accountRows
+      .filter(function (r) { return r.action === '매도' && r.holdingDays !== null && r.holdingDays !== undefined; })
+      .map(function (r) { return r.holdingDays; });
+    var holdingDaysEl = document.getElementById('tradeKpiHoldingDays');
+    if (holdingDaysList.length) {
+      var avgHoldingDays = holdingDaysList.reduce(function (s, d) { return s + d; }, 0) / holdingDaysList.length;
+      holdingDaysEl.textContent = Math.round(avgHoldingDays).toLocaleString('ko-KR') + '일';
+    } else {
+      holdingDaysEl.textContent = '-';
+    }
+
+    var tbody = document.getElementById('holdingsTableBody');
+    var hEmpty = document.getElementById('holdingsEmpty');
+    if (!holdingsRendered.length) {
+      tbody.innerHTML = '';
+      hEmpty.style.display = 'block';
+    } else {
+      hEmpty.style.display = 'none';
+      tbody.innerHTML = holdingsRendered.map(function (h) {
+        var pnlClass = h.pnl > 0 ? 'stock-pos' : (h.pnl < 0 ? 'stock-neg' : '');
+        return '<tr>' +
+          '<td>' + h.name + '</td>' +
+          '<td style="text-align:right;">' + h.qty.toLocaleString('ko-KR') + '</td>' +
+          '<td style="text-align:right;">' + won(h.avgCost) + '</td>' +
+          '<td style="text-align:right;">' + (h.currentPrice !== null ? won(h.currentPrice) : '-') + '</td>' +
+          '<td style="text-align:right;">' + won(h.valuation) + '</td>' +
+          '<td style="text-align:right;" class="' + pnlClass + '">' + won(h.pnl) + '</td>' +
+          '<td style="text-align:right;" class="' + pnlClass + '">' + pct(h.ret) + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    renderTradePriceStatus_(holdingsRendered);
+    renderTradePnlChart_(accountRows, totalInvested);
+    renderTradePnlByStockChart_(accountRows);
+    renderTradeAllocationChart_(holdingsRendered);
+  }
+
+  function renderTradePriceStatus_(holdingsRendered) {
+    var el = document.getElementById('tradePriceStatus');
+    var status = state.trades.priceStatus || {};
+    var missing = holdingsRendered.filter(function (h) { return h.currentPrice === null; }).length;
+
+    if (status.offline) {
+      el.textContent = '⚠ 시트 연동이 설정되지 않아 예시 스냅샷 현재가를 표시 중입니다. ⚙ 시트 연동 설정에서 URL을 등록하세요.';
+    } else if (status.ok === false) {
+      el.textContent = '⚠ 현재가 조회 실패: ' + (status.error || '알 수 없는 오류') + ' — 예시 스냅샷 값으로 대체 표시합니다.';
+    } else if (status.fromCache) {
+      el.textContent = '⚠ 네트워크가 불안정해서 최신 현재가를 못 불러왔어요. 마지막으로 성공했던 현재가(' + status.count + '건)를 보여주는 중입니다.';
+    } else if (missing > 0) {
+      el.textContent = '현재가 ' + status.count + '건 연동됨. 이 중 ' + missing + '개 종목은 "⚙️설정_자산" 탭에서 계좌+종목명이 일치하는 행을 찾지 못해 매입원가로 대체 표시했습니다.';
+    } else {
