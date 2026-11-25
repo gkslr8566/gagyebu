@@ -1,0 +1,101 @@
+        '<div class="hw-kv"><span>자산</span><b>' + man_(assets) + '</b></div>' + bar_(assets, assets, '#6366f1', 8) +
+        '<div class="hw-kv"><span>부채</span><b>' + man_(A.debtAll) + '</b></div>' + bar_(A.debtAll, assets, 'var(--expense)', 8) +
+        '<div class="hw-foot">보증금 + 적금·청약·CMA + 투자 − 대출·차입금 (입출금 통장 제외)</div>';
+    },
+    spend: function (ctx) {
+      var idx = ctx.months.indexOf(ctx.month);
+      if (idx < 0) return '<div class="hw-empty">기록이 없어요</div>';
+      var ms = ctx.months.slice(Math.max(0, idx - 3), idx + 1);
+      var data = homeSpendByMonth_(ms);
+      var limit = HOME_CONFIG.essentialLimit || 0;
+      var max = limit;
+      ms.forEach(function (m) { var d = data[m]; max = Math.max(max, d.fixed + d.need + d.flex); });
+      if (!max) return '<div class="hw-empty">기록이 없어요</div>';
+      var cur = data[ctx.month], ess = cur.fixed + cur.need;
+      var head = '<div class="hw-kv"><span>' + monthLabel_(ctx.month) + ' 고정비 + 필수 변동비</span><b>' + man_(ess) + (limit ? ' <em class="hw-pctx">/ 기준 ' + man_(limit) + '</em>' : '') + '</b></div>';
+      if (limit) head += '<div class="hw-note ' + (ess > limit ? 'hw-warn' : '') + '">' + (ess > limit ? ('기준보다 ' + man_(ess - limit) + ' 더 썼어요') : ('기준 안이에요 (' + man_(limit - ess) + ' 여유)')) + '</div>';
+      var rows = ms.map(function (m) {
+        var d = data[m];
+        function seg(v, c, name) { return v > 0 ? '<div style="width:' + (v / max * 100) + '%;background:' + c + '" title="' + name + ' ' + man_(v) + '"></div>' : ''; }
+        return '<div class="sp-row' + (m === ctx.month ? ' sel' : '') + '"><span class="sp-m">' + monthLabel_(m) + '</span>' +
+          '<div class="sp-bar"><div class="hw-stack">' + seg(d.fixed, '#6366f1', '고정비') + seg(d.need, '#3b82f6', '필수 변동비') + seg(d.flex, '#cbd5e1', '비고정비') + '</div>' +
+          (limit ? '<i class="sp-limit" style="left:' + (limit / max * 100) + '%"></i>' : '') + '</div>' +
+          '<span class="sp-v">' + man_(d.fixed + d.need) + ' <em>+ ' + man_(d.flex) + '</em></span></div>';
+      }).join('');
+      var legend = '<div class="hw-legend"><span><i style="background:#6366f1"></i>고정비 <b>' + man_(cur.fixed) + '</b></span><span><i style="background:#3b82f6"></i>필수 변동비 <b>' + man_(cur.need) + '</b></span><span><i style="background:#cbd5e1"></i>비고정비 <b>' + man_(cur.flex) + '</b></span>' + (limit ? '<span><i class="sp-limit-key"></i>기준선</span>' : '') + '</div>';
+      var top = cur.items.slice().sort(function (x, y) { return y.amt - x.amt; }).slice(0, 3);
+      var topHtml = top.length ? '<div class="hw-note">' + monthLabel_(ctx.month) + ' 비고정비 큰 것: ' + top.map(function (t) { return esc_(t.memo) + ' ' + man_(t.amt); }).join(' · ') + '</div>' : '';
+      return head + '<div class="sp-list">' + rows + '</div>' + legend + topHtml +
+        '<div class="hw-foot">고정비: 주거·대출이자·보험·통신·구독·용돈 / 필수 변동비: 생활비·차량·교통·의료·미용 / 나머지는 비고정비</div>';
+    },
+    rate: function (ctx) {
+      var a = ctx.agg, inc = a.income;
+      var prevMonths = lastMonths_(ctx.months, ctx.month, 3);
+      var avgS = 0, avgI = 0, cnt = 0;
+      prevMonths.forEach(function (m) { var x = homeMonthAgg_(m); if (x.income > 0) { avgS += x.saving / x.income; avgI += x.invest / x.income; cnt++; } });
+      if (cnt) { avgS /= cnt; avgI /= cnt; }
+      if (!inc) return '<div class="hw-empty">' + esc_(ctx.month) + '에는 수입 기록이 없어요</div>';
+      var sR = a.saving / inc, iR = a.invest / inc;
+      function line(label, amt, r, avg, color) {
+        var d = r - avg;
+        return '<div class="hw-rate"><div class="hw-kv"><span>' + label + '</span><b>' + pct1_(r) + ' · ' + man_(amt) + '</b></div>' +
+          bar_(r, 0.6, color, 10) +
+          (cnt ? '<div class="hw-note">최근 ' + cnt + '개월 평균 ' + pct1_(avg) + ' <span class="hw-delta ' + (d >= 0 ? 'up' : 'down') + '">' + (d >= 0 ? '▲' : '▼') + ' ' + pct1_(Math.abs(d)) + 'p</span></div>' : '') + '</div>';
+      }
+      return '<div class="hw-two">' + line('저축률', a.saving, sR, avgS, 'var(--saving)') + line('투자율', a.invest, iR, avgI, 'var(--invest)') + '</div>' +
+        '<div class="hw-foot">수입 ' + man_(inc) + ' 기준 · 합계 ' + pct1_(sR + iR) + '</div>';
+    },
+    flowbar: function (ctx) {
+      var a = ctx.agg, inc = a.income;
+      var segs = HOME_GROUP_ORDER.filter(function (g) { return a.groups[g]; }).map(function (g) { return [g, a.groups[g]]; });
+      segs.push(['저축', a.saving]); segs.push(['투자', a.invest]);
+      var used = segs.reduce(function (s, x) { return s + x[1]; }, 0);
+      if (inc > used) segs.push(['남은 돈', inc - used]);
+      var total = Math.max(inc, used);
+      if (!total) return '<div class="hw-empty">이 달 기록이 없어요</div>';
+      var barHtml = '<div class="hw-stack">' + segs.filter(function (s) { return s[1] > 0; }).map(function (s) {
+        return '<div style="width:' + (s[1] / total * 100) + '%;background:' + HOME_GROUP_COLOR[s[0]] + '" title="' + esc_(s[0]) + ' ' + man_(s[1]) + '"></div>';
+      }).join('') + '</div>';
+      var legend = '<div class="hw-legend">' + segs.filter(function (s) { return s[1] > 0; }).map(function (s) {
+        return '<span><i style="background:' + HOME_GROUP_COLOR[s[0]] + '"></i>' + esc_(s[0]) + ' <b>' + man_(s[1]) + '</b>' + (inc > 0 ? ' <em class="hw-pctx">(' + pct1_(s[1] / inc) + ')</em>' : '') + '</span>';
+      }).join('') + '</div>';
+      return '<div class="hw-kv"><span>수입</span><b>' + man_(inc) + '</b></div>' + barHtml + legend +
+        (inc < used ? '<div class="hw-note hw-warn">수입보다 ' + man_(used - inc) + ' 더 나갔어요</div>' : '') +
+        (a.uncategorized ? '<div class="hw-foot">미분류 ' + a.uncategorized + '건은 "미분류"로 표시돼요</div>' : '');
+    },
+    sankey: function (ctx) {
+      var a = ctx.agg, inc = a.income;
+      var outs = HOME_GROUP_ORDER.filter(function (g) { return a.groups[g]; }).map(function (g) { return [g, a.groups[g]]; });
+      outs.push(['저축', a.saving]); outs.push(['투자', a.invest]);
+      outs = outs.filter(function (o) { return o[1] > 0; });
+      var used = outs.reduce(function (s, x) { return s + x[1]; }, 0);
+      if (inc > used) outs.push(['남은 돈', inc - used]);
+      var total = Math.max(inc, used);
+      if (!total) return '<div class="hw-empty">이 달 기록이 없어요</div>';
+      var W = 340, H = 210, gap = 4, avail = H - 10 - gap * (outs.length - 1);
+      var leftH = (inc / total) * (H - 10), y0 = 5, ry = 5, ly = y0, b = '';
+      b += '<rect x="6" y="' + y0 + '" width="12" height="' + Math.max(2, leftH) + '" rx="3" fill="var(--income)"/>';
+      outs.forEach(function (o) {
+        var h = Math.max(2, o[1] / total * avail), lh = o[1] / total * (H - 10);
+        var c = HOME_GROUP_COLOR[o[0]];
+        b += '<path d="M18 ' + ly + ' C 150 ' + ly + ', 150 ' + ry + ', 222 ' + ry + ' L 222 ' + (ry + h) + ' C 150 ' + (ry + h) + ', 150 ' + (ly + lh) + ', 18 ' + (ly + lh) + ' Z" fill="' + c + '" opacity="0.45"/>';
+        b += '<rect x="222" y="' + ry + '" width="10" height="' + h + '" rx="2" fill="' + c + '"/>';
+        b += '<text x="238" y="' + (ry + h / 2 + 4) + '" font-size="11" fill="var(--text)">' + esc_(o[0]) + ' ' + esc_(man_(o[1])) + '</text>';
+        ly += lh; ry += h + gap;
+      });
+      return '<svg class="hw-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + b + '</svg><div class="hw-foot">왼쪽 막대가 수입 ' + man_(inc) + '</div>';
+    },
+    catdelta: function (ctx) {
+      var a = ctx.agg;
+      var prevMonths = lastMonths_(ctx.months, ctx.month, 3);
+      if (!prevMonths.length) return '<div class="hw-empty">비교할 이전 달 기록이 없어요</div>';
+      var avg = {};
+      prevMonths.forEach(function (m) { var x = homeMonthAgg_(m); Object.keys(x.mains).forEach(function (k) { avg[k] = (avg[k] || 0) + x.mains[k] / prevMonths.length; }); });
+      var keys = Array.from(new Set(Object.keys(a.mains).concat(Object.keys(avg)))).filter(function (k) { return k !== '미분류'; });
+      var rows = keys.map(function (k) { return { k: k, d: (a.mains[k] || 0) - (avg[k] || 0), now: a.mains[k] || 0 }; })
+        .filter(function (r) { return Math.abs(r.d) >= 10000; })
+        .sort(function (x, y) { return Math.abs(y.d) - Math.abs(x.d); }).slice(0, 6);
+      if (!rows.length) return '<div class="hw-empty">평소와 비슷하게 썼어요</div>';
+      var max = Math.max.apply(null, rows.map(function (r) { return Math.abs(r.d); }));
+      return '<div class="hw-diverge">' + rows.map(function (r) {
+        var w = Math.abs(r.d) / max * 50;

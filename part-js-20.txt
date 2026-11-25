@@ -1,0 +1,51 @@
+      if (state.home.editing) renderHomeEditor_();
+    });
+    document.getElementById('homeEditor').addEventListener('click', function (e) {
+      var t = e.target.closest('[data-he], #homeSaveBtn, #homeResetBtn');
+      if (!t) return;
+      var b = state.home.board;
+      if (t.id === 'homeSaveBtn') { saveBoard_(document.getElementById('homeSaveStatus')); return; }
+      if (t.id === 'homeResetBtn') { state.home.board = defaultBoard_(); renderHomeTab_(); return; }
+      var id = t.getAttribute('data-id'), act = t.getAttribute('data-he');
+      if (act === 'toggle') return; // 체크박스는 change에서 처리
+      var i = b.order.indexOf(id);
+      if (act === 'up' && i > 0) { b.order.splice(i, 1); b.order.splice(i - 1, 0, id); }
+      if (act === 'down' && i < b.order.length - 1) { b.order.splice(i, 1); b.order.splice(i + 1, 0, id); }
+      if (act === 'half' || act === 'full') b.size[id] = act;
+      renderHomeTab_();
+    });
+    document.getElementById('homeEditor').addEventListener('change', function (e) {
+      var t = e.target;
+      if (t.getAttribute('data-he') !== 'toggle') return;
+      state.home.board.hidden[t.getAttribute('data-id')] = !t.checked;
+      renderHomeTab_();
+    });
+  }
+
+  // ---------- PWA(홈 화면에 추가 시 앱처럼 보이기) ----------
+  // Apps Script가 이 페이지 자체를 서빙하는 경우(휴대폰 접속용, __SELF_URL 존재)에만
+  // manifest.json 링크를 동적으로 추가한다. PC에서 파일을 직접 열었을 때는 매니페스트가
+  // 의미 없으므로(로컬 파일이라 fetch 불가) 건드리지 않는다.
+  function setupPwaManifestIfSelfServed_() {
+    if (!window.__SELF_URL) return;
+    var link = document.createElement('link');
+    link.rel = 'manifest';
+    var sep = window.__SELF_URL.indexOf('?') >= 0 ? '&' : '?';
+    link.href = window.__SELF_URL + sep + 'action=manifest';
+    document.head.appendChild(link);
+  }
+
+  // ---------- 초기화 ----------
+  window.__categoryList = [];
+  setupPwaManifestIfSelfServed_();
+  bindEvents();
+  bindHomeEvents_();
+  fetchMetaAndFillCategories();
+  refreshAll();
+  refreshTrades();
+  refreshAssets();
+  refreshGoals();
+  refreshVehicle();
+  loadBoard_();
+  checkKeyStatus_();
+})();

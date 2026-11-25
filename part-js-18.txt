@@ -1,0 +1,109 @@
+        return '<div class="hw-dv-row"><span class="hw-dv-k">' + esc_(r.k) + '</span><div class="hw-dv-bar"><div class="hw-dv-mid"></div><div class="hw-dv-fill ' + (r.d > 0 ? 'up' : 'down') + '" style="width:' + w + '%;' + (r.d > 0 ? 'left:50%' : 'right:50%') + '"></div></div><span class="hw-dv-v ' + (r.d > 0 ? 'up' : 'down') + '">' + signed_(r.d, man_) + '</span></div>';
+      }).join('') + '</div><div class="hw-foot">최근 ' + prevMonths.length + '개월 평균 대비 · 미분류 제외</div>';
+    },
+    card: function (ctx) {
+      var a = ctx.agg;
+      var rows = Object.keys(a.pay).map(function (k) { return [k, a.pay[k]]; }).sort(function (x, y) { return y[1] - x[1]; });
+      if (!rows.length) return '<div class="hw-empty">이 달 지출이 없어요</div>';
+      var max = rows[0][1];
+      return rows.slice(0, 7).map(function (r) {
+        return '<div class="hw-kv"><span>' + esc_(r[0]) + '</span><b>' + man_(r[1]) + '</b></div>' + bar_(r[1], max, '#3b82f6', 7);
+      }).join('');
+    },
+    heat: function (ctx) {
+      var a = ctx.agg, p = String(ctx.month).split('.');
+      var y = parseInt(p[0], 10), m = parseInt(p[1], 10);
+      if (!y || !m) return '<div class="hw-empty">월 정보를 읽지 못했어요</div>';
+      var first = new Date(y, m - 1, 1).getDay(), days = new Date(y, m, 0).getDate();
+      var vals = Object.keys(a.days).map(function (k) { return a.days[k]; });
+      var max = vals.length ? Math.max.apply(null, vals) : 0;
+      var cells = '';
+      ['일', '월', '화', '수', '목', '금', '토'].forEach(function (d) { cells += '<div class="hw-cal-h">' + d + '</div>'; });
+      for (var i = 0; i < first; i++) cells += '<div></div>';
+      for (var d = 1; d <= days; d++) {
+        var key = y + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
+        var v = a.days[key] || 0;
+        var op = v && max ? (0.15 + 0.85 * v / max) : 0;
+        cells += '<div class="hw-cal-d" title="' + key + ' ' + man_(v) + '" style="background:rgba(99,102,241,' + op.toFixed(2) + ');' + (op > 0.55 ? 'color:#fff' : '') + '">' + d + '</div>';
+      }
+      var top = Object.keys(a.days).sort(function (x, z) { return a.days[z] - a.days[x]; })[0];
+      return '<div class="hw-cal">' + cells + '</div>' + (top ? '<div class="hw-foot">가장 많이 쓴 날 ' + parseInt(top.slice(8), 10) + '일 · ' + man_(a.days[top]) + '</div>' : '');
+    },
+    nwcompose: function (ctx) {
+      var A = ctx.asset;
+      var sav = A.latest ? A.savingsAllSeries[A.latest] : 0;
+      var items = [['보증금', HOME_CONFIG.deposit, '#6366f1'], ['적금·청약·CMA', sav, '#10b981'], ['투자', A.investNow, '#f59e0b']];
+      var total = items.reduce(function (s, x) { return s + x[1]; }, 0);
+      var scale = Math.max(total, A.debtAll);
+      function stack(list) {
+        return '<div class="hw-stack" style="width:' + (list.reduce(function (s, x) { return s + x[1]; }, 0) / scale * 100) + '%">' + list.map(function (x) {
+          return '<div style="flex:' + x[1] + ';background:' + x[2] + '" title="' + esc_(x[0]) + ' ' + man_(x[1]) + '"></div>';
+        }).join('') + '</div>';
+      }
+      var debts = HOME_CONFIG.debts.map(function (d, i) { return [d.name, d.amount, i ? '#fb923c' : 'var(--expense)']; });
+      function legend(list) { return '<div class="hw-legend">' + list.map(function (x) { return '<span><i style="background:' + x[2] + '"></i>' + esc_(x[0]) + ' <b>' + man_(x[1]) + '</b></span>'; }).join('') + '</div>'; }
+      return '<div class="hw-kv"><span>자산</span><b>' + man_(total) + '</b></div>' + stack(items) + legend(items) +
+        '<div class="hw-kv" style="margin-top:10px"><span>부채</span><b>' + man_(A.debtAll) + '</b></div>' + stack(debts) + legend(debts);
+    },
+    leftover: function (ctx) {
+      var ms = ctx.months.slice(0, ctx.months.indexOf(ctx.month) + 1).slice(-12);
+      if (!ms.length) return '<div class="hw-empty">기록이 없어요</div>';
+      var vals = ms.map(function (m) { var x = homeMonthAgg_(m); return x.income - x.expense - x.saving - x.invest; });
+      var W = 340, H = 170, T = 22, B = 34, L = 6, R = 6;
+      var max = Math.max.apply(null, vals.map(Math.abs).concat([1]));
+      var hasNeg = vals.some(function (v) { return v < 0; }), hasPos = vals.some(function (v) { return v >= 0; });
+      var zero = hasNeg && hasPos ? T + (H - T - B) / 2 : (hasNeg ? T : H - B);
+      var span = hasNeg && hasPos ? (H - T - B) / 2 : (H - T - B);
+      var slot = (W - L - R) / ms.length, bw = Math.min(26, slot * 0.6), b = '';
+      b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + zero + '" y2="' + zero + '" stroke="var(--border)" stroke-width="1"/>';
+      ms.forEach(function (m, i) {
+        var v = vals[i], h = Math.abs(v) / max * span, x = L + slot * i + (slot - bw) / 2;
+        var y = v >= 0 ? zero - h : zero;
+        var c = v >= 0 ? 'var(--saving)' : 'var(--expense)';
+        var sel = m === ctx.month;
+        b += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(1, h).toFixed(1) + '" rx="3" fill="' + c + '" opacity="' + (sel ? 1 : 0.55) + '"/>';
+        var lbl = (v < 0 ? '-' : '') + Math.round(Math.abs(v) / 10000).toLocaleString('ko-KR');
+        var ly = v >= 0 ? y - 4 : y + h + 11;
+        b += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + ly.toFixed(1) + '" font-size="9.5" font-weight="' + (sel ? 700 : 500) + '" text-anchor="middle" fill="var(--text)">' + lbl + '</text>';
+        b += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) + '" font-size="10" text-anchor="middle" fill="var(--muted)">' + monthLabel_(m) + '</text>';
+      });
+      var cur = vals[vals.length - 1], avg = vals.slice(0, -1);
+      var avgV = avg.length ? avg.reduce(function (s, x) { return s + x; }, 0) / avg.length : null;
+      return '<div class="hw-kv"><span>' + monthLabel_(ctx.month) + ' 남은 금액</span><b class="' + (cur >= 0 ? 'stock-pos' : 'stock-neg') + '">' + man_(cur) + '</b></div>' +
+        '<svg class="hw-svg hw-svg-wide" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + b + '</svg>' +
+        '<div class="hw-foot">수입 − 지출 − 저축 − 투자 · 막대 위 숫자는 만 원' + (avgV !== null ? ' · 이전 ' + avg.length + '개월 평균 ' + man_(avgV) : '') + '</div>';
+    },
+    nwtrend: function (ctx) {
+      var A = ctx.asset, ms = A.nwMonths.slice(-12);
+      return lineSvg_(ms.map(monthLabel_), ms.map(function (m) { return A.nwSeries[m]; }), '#6366f1', man_) +
+        '<div class="hw-foot">투자 평가액 기록이 있는 달부터 · 입출금 통장 제외</div>';
+    },
+    accounts: function (ctx) {
+      var list = ctx.asset.balances.slice().sort(function (x, y) { return y.balance - x.balance; });
+      if (!list.length) return '<div class="hw-empty">계좌 마스터에 등록된 저축 계좌가 없어요</div>';
+      return list.map(function (a) {
+        return '<div class="hw-kv hw-line"><span>' + esc_(a.name) + (a.inGoal ? '' : ' <em class="hw-chip">1억 제외</em>') + '</span><b>' + man_(a.balance) + '</b></div>';
+      }).join('');
+    },
+    sim: function (ctx) {
+      var A = ctx.asset;
+      var now = A.latest ? A.goalSeries[A.latest] : 0;
+      var remain = Math.max(0, HOME_CONFIG.goalTarget - now);
+      if (state.home.simMonthly === null) state.home.simMonthly = A.speed && A.speed > 0 ? Math.round(A.speed / 100000) * 100000 : 1500000;
+      var mo = state.home.simMonthly;
+      var months = mo > 0 ? Math.ceil(remain / mo) : null;
+      var when = '';
+      if (months !== null) { var d = new Date(); d.setMonth(d.getMonth() + months); when = d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월'; }
+      return '<label class="hw-kv" for="homeSimRange"><span>매달 모으는 금액</span><b id="homeSimVal">' + man_(mo) + '</b></label>' +
+        '<input type="range" id="homeSimRange" min="500000" max="5000000" step="100000" value="' + mo + '" class="hw-range">' +
+        '<div class="hw-big" id="homeSimOut">' + (remain <= 0 ? '이미 달성' : (months + '개월')) + '</div>' +
+        '<div class="hw-note" id="homeSimWhen">' + (remain > 0 ? (when + ' 도달 예상 · 남은 ' + man_(remain)) : '') + '</div>' +
+        '<div class="hw-foot">이자·수익 제외 단순 계산 · 처음 값은 최근 3개월 평균 속도</div>';
+    },
+    invcards: function (ctx) {
+      var inv = ctx.invest;
+      if (!inv.accounts.length) return '<div class="hw-empty">투자 계좌 기록이 없어요</div>';
+      var total = inv.accounts.reduce(function (s, a) { return s + a.value; }, 0);
+      return '<div class="hw-kv"><span>합계</span><b>' + man_(total) + '</b></div><div class="hw-inv">' + inv.accounts.map(function (a) {
+        var r = a.cost > 0 ? (a.value - a.cost) / a.cost : null;
+        var short = a.name.replace(/\s*_\s*/, ' · ').replace('미래에셋 ', '').replace('퇴직연금 개인', '').replace('주식모으기', '모으기');

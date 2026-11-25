@@ -1,0 +1,112 @@
+    var W = 340, H = opts.h || 176, L = 6, R = 6, T = 20, B = 34;
+    var hi = Math.max.apply(null, values.concat([0])), lo = Math.min.apply(null, values.concat([0]));
+    if (hi === lo) hi = 1;
+    var slot = (W - L - R) / n, bw = Math.min(34, slot * 0.62);
+    function y(v) { return T + (H - T - B) * (1 - (v - lo) / (hi - lo)); }
+    var zero = y(0);
+    var out = '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + zero.toFixed(1) + '" y2="' + zero.toFixed(1) + '" stroke="var(--border)" stroke-width="1"/>';
+    labels.forEach(function (lb, i) {
+      var v = Number(values[i]) || 0, cx = L + slot * i + slot / 2;
+      var top = v >= 0 ? y(v) : zero, h = Math.max(v ? 1.5 : 0, Math.abs(y(v) - zero));
+      if (v) out += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="4" fill="' + (v >= 0 ? pos : neg) + '"><title>' + esc_(lb + ' ' + man_(v)) + '</title></rect>';
+      if (v) out += '<text x="' + cx.toFixed(1) + '" y="' + (v >= 0 ? top - 5 : top + h + 11).toFixed(1) + '" font-size="9.5" font-weight="700" text-anchor="middle" fill="' + (v >= 0 ? pos : neg) + '">' + esc_((v > 0 ? '+' : '') + fmt(v)) + '</text>';
+      out += '<text x="' + cx.toFixed(1) + '" y="' + (H - 7) + '" font-size="10" text-anchor="middle" fill="var(--muted)">' + esc_(lb) + '</text>';
+    });
+    return '<svg class="hw-svg dt-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + out + '</svg>';
+  }
+
+  // =====================================================================
+  // 가계부 탭: 분류별 지출 (고정비 / 필수 변동비 / 비고정비 → 중분류 → 내역)
+  // =====================================================================
+  state.spendUI = { month: null, bucket: 'all', open: {} };
+  var BUCKET_META = {
+    fixed: { name: '고정비', color: '#6366f1' },
+    need: { name: '필수 변동비', color: '#3b82f6' },
+    flex: { name: '비고정비', color: '#94a3b8' }
+  };
+  function spendCatLabel_(r) {
+    var s = r.sub || '';
+    if (!r.type || !r.main) return '미분류';
+    if (r.main === '보험' && s.indexOf('자동차') >= 0) return '자동차 보험';
+    if (r.main === '차량관리비' && s.indexOf('자동차세') >= 0) return '자동차세';
+    return r.main;
+  }
+  function renderSpendDetail_() {
+    var box = document.getElementById('spendDetail');
+    if (!box) return;
+    var months = (state.allMonths || []).slice().sort();
+    if (!months.length) { box.innerHTML = '<h3>분류별 지출</h3>' + emptyBox_('기록이 없어요'); return; }
+    var ui = state.spendUI;
+    if (!ui.month || months.indexOf(ui.month) < 0) ui.month = homeDefaultMonth_(months) || months[months.length - 1];
+    var idx = months.indexOf(ui.month);
+    var win = months.slice(Math.max(0, idx - 3), idx + 1);
+    var prev = idx > 0 ? months[idx - 1] : null;
+
+    var cats = {}, tot = { fixed: 0, need: 0, flex: 0 };
+    (state.rows || []).map(parseRow).forEach(function (r) {
+      if (win.indexOf(r.yearMonth) < 0) return;
+      if (r.type && r.type !== '지출') return;
+      var b = homeBucketOf_(r), label = spendCatLabel_(r), key = b + '|' + label;
+      var c = cats[key] || (cats[key] = { key: key, label: label, bucket: b, byMonth: {}, items: [] });
+      c.byMonth[r.yearMonth] = (c.byMonth[r.yearMonth] || 0) + r.applied;
+      if (r.yearMonth === ui.month) { tot[b] += r.applied; c.items.push(r); }
+    });
+    var list = Object.keys(cats).map(function (k) { return cats[k]; }).filter(function (c) {
+      if (ui.bucket !== 'all' && c.bucket !== ui.bucket) return false;
+      return true;
+    });
+    var gone = list.filter(function (c) { return !(c.byMonth[ui.month] || 0) && prev && (c.byMonth[prev] || 0) > 0; });
+    list = list.filter(function (c) { return (c.byMonth[ui.month] || 0) !== 0; }).sort(function (a, b) { return (b.byMonth[ui.month] || 0) - (a.byMonth[ui.month] || 0); });
+    var maxCur = Math.max.apply(null, list.map(function (c) { return c.byMonth[ui.month] || 0; }).concat([1]));
+
+    var limit = HOME_CONFIG.essentialLimit || 0, ess = tot.fixed + tot.need;
+    var head = '<div class="toolbar"><h3 style="margin:0;">분류별 지출</h3><div class="mini-filter-bar"><select id="sdMonth" aria-label="기준 월">' +
+      months.slice().reverse().map(function (m) { return '<option value="' + m + '"' + (m === ui.month ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select></div></div>';
+    var sum = '<div class="hw-kv" style="margin-top:12px;"><span>고정비 + 필수 변동비</span><b>' + man_(ess) + (limit ? ' <em class="hw-pctx">/ 기준 ' + man_(limit) + '</em>' : '') + '</b></div>' +
+      (limit ? bar_(ess, Math.max(limit, ess), ess > limit ? 'var(--expense)' : 'var(--accent)', 8) +
+        '<div class="hw-note ' + (ess > limit ? 'hw-warn' : '') + '" style="margin-top:6px;">' + (ess > limit ? ('기준보다 ' + man_(ess - limit) + ' 더 썼어요') : ('기준 안이에요 (' + man_(limit - ess) + ' 여유)')) + '</div>' : '');
+    var seg = '<div class="segmented dt-seg" id="sdBucket">' + [['all', '전체', tot.fixed + tot.need + tot.flex], ['fixed', '고정비', tot.fixed], ['need', '필수 변동비', tot.need], ['flex', '비고정비', tot.flex]].map(function (b) {
+      return '<button type="button" class="seg-btn' + (ui.bucket === b[0] ? ' active' : '') + '" data-bucket="' + b[0] + '">' + b[1] + '<small>' + short_(b[2]) + '</small></button>';
+    }).join('') + '</div>';
+
+    var rowsHtml = list.map(function (c) {
+      var cur = c.byMonth[ui.month] || 0, pv = prev ? (c.byMonth[prev] || 0) : null;
+      var d = pv === null ? null : cur - pv;
+      var meta = BUCKET_META[c.bucket];
+      var items = c.items.slice().sort(function (x, y) { return y.applied - x.applied; });
+      var deltaHtml = (d === null || d === 0) ? '<span class="al-cnt">' + items.length + '건</span>' :
+        '<span class="al-cnt dt-delta ' + (d > 0 ? 'up' : 'down') + '">전월 ' + (d > 0 ? '+' : '') + short_(d) + '</span>';
+      return '<details class="al-month dt-cat" data-key="' + esc_(c.key) + '"' + (ui.open[c.key] ? ' open' : '') + '>' +
+        '<summary><span class="al-m">' + esc_(c.label) + (ui.bucket === 'all' ? ' <em class="hw-chip">' + meta.name + '</em>' : '') + '</span>' + deltaHtml +
+        '<span class="al-total">' + man_(cur) + '</span>' +
+        '<span class="al-bar"><span style="width:' + (Math.max(0, cur) / maxCur * 100) + '%;background:' + meta.color + '"></span></span></summary>' +
+        '<div class="dt-months">' + win.map(function (m) { return '<span' + (m === ui.month ? ' class="sel"' : '') + '>' + monthLabel_(m) + ' <b>' + short_(c.byMonth[m] || 0) + '</b></span>'; }).join('') + '</div>' +
+        (items.length ? '<ul class="al-items">' + items.map(function (r) {
+          var dd = String(r.date || '').slice(5, 10).replace('-', '.');
+          var small = [r.sub, r.payment].filter(Boolean).join(' · ');
+          return '<li><span class="al-d">' + esc_(dd) + '</span><span class="al-memo">' + esc_(r.memo || '(내역 미입력)') + (small ? '<small>' + esc_(small) + '</small>' : '') + '</span><span class="al-amt">' + won(r.applied) + '</span></li>';
+        }).join('') + '</ul>' : '<div class="hw-note" style="padding:0 14px 10px;">이 달에는 내역이 없어요</div>') +
+        '</details>';
+    }).join('');
+
+    var goneHtml = gone.length ? '<div class="hw-note" style="margin-bottom:8px;">전월에는 있었는데 이 달엔 아직 없는 항목: ' + gone.map(function (c) { return esc_(c.label) + ' ' + short_(c.byMonth[prev]); }).join(' · ') + '</div>' : '';
+    box.innerHTML = head + sum + seg + '<div class="al-list">' + (rowsHtml || emptyBox_('이 달 지출 기록이 없어요')) + '</div>' + goneHtml +
+      '<div class="hint">항목을 누르면 최근 4개월 금액과 그 달 내역이 펼쳐져요. 분류가 비어 있는 건은 "미분류"(비고정비)로 잡혀요.</div>';
+
+    document.getElementById('sdMonth').addEventListener('change', function (e) { ui.month = e.target.value; ui.open = {}; renderSpendDetail_(); });
+    Array.prototype.forEach.call(box.querySelectorAll('#sdBucket .seg-btn'), function (btn) {
+      btn.addEventListener('click', function () { ui.bucket = btn.getAttribute('data-bucket'); renderSpendDetail_(); });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('details.dt-cat'), function (el) {
+      el.addEventListener('toggle', function () { ui.open[el.getAttribute('data-key')] = el.open; });
+    });
+  }
+
+  // =====================================================================
+  // 자산 탭: 1억 상세 · 계좌별 추이 · 자산 구성 추이 · 월별 증감
+  // =====================================================================
+  function renderGoalDetail_() {
+    var box = document.getElementById('goalDetailBox');
+    if (!box) return;
+    if (!HOME_CONFIG.loaded) { box.innerHTML = emptyBox_('시트에 연결되면 표시돼요'); return; }
+    var A = homeAssetCalc_();

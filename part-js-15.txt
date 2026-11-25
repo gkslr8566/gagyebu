@@ -1,0 +1,105 @@
+    if (!A.latest) { box.innerHTML = emptyBox_('기록이 없어요'); return; }
+    var prevM = prevMonthOf(A.latest), series = A.calc.savingsSeries || {};
+    var now = A.goalSeries[A.latest], target = HOME_CONFIG.goalTarget;
+    var lines = A.balances.filter(function (b) { return b.inGoal; }).sort(function (a, b) { return b.balance - a.balance; }).map(function (b) {
+      var pv = series[b.name] ? series[b.name][prevM] : undefined;
+      var d = pv === undefined ? null : b.balance - pv;
+      return '<div class="hw-kv hw-line"><span>' + esc_(b.name) + '</span><b>' + man_(b.balance) + (d ? ' <em class="dt-delta ' + (d > 0 ? 'good' : 'bad') + '">' + (d > 0 ? '+' : '') + short_(d) + '</em>' : '') + '</b></div>';
+    }).join('');
+    var debts = HOME_CONFIG.debts.filter(function (d) { return d.inGoal; }).map(function (d) {
+      return '<div class="hw-kv hw-line"><span>' + esc_(d.name) + '</span><b class="hw-warn">-' + man_(d.amount) + '</b></div>';
+    }).join('');
+    var ms = A.months.slice(-9), labels = [], diffs = [];
+    for (var i = 1; i < ms.length; i++) { labels.push(monthLabel_(ms[i])); diffs.push(A.goalSeries[ms[i]] - A.goalSeries[ms[i - 1]]); }
+    var remain = target - now;
+    box.innerHTML = '<div class="hw-row"><span class="hw-big">' + man_(now) + '</span><span class="hw-pct">' + pct1_(now / target) + '</span></div>' +
+      bar_(now, target, 'var(--accent)', 12) +
+      '<div class="hw-note" style="margin:6px 0 10px;">' + (remain > 0 ? ('남은 금액 ' + man_(remain) + (A.speed > 0 ? ' · 최근 3개월 평균 월 ' + man_(A.speed) + '씩 증가' : '')) : '목표 달성!') + '</div>' +
+      lines + debts +
+      '<div class="hw-kv hw-line" style="font-weight:700;"><span style="color:var(--text);">1억 기준액</span><b>' + man_(now) + '</b></div>' +
+      (diffs.length ? '<div class="dt-sub">월별 증가액</div>' + dvbars_(labels, diffs, { h: 150 }) : '') +
+      '<div class="hw-foot">' + esc_(A.latest) + ' 기준 · 초록 숫자는 전월 대비 증가 · 입출금·환갑 적금·투자 계좌는 제외</div>';
+  }
+
+  function renderAccountTrend_(calc) {
+    var box = document.getElementById('accountTrendBox');
+    if (!box) return;
+    var opts = (calc.savingsAccounts || []).map(function (a) { return { key: a.name, name: a.name, series: calc.savingsSeries[a.name] }; });
+    opts.push({ key: '__cash', name: '현금성 (합계)', series: calc.typeSeries['현금성'] });
+    opts.push({ key: '__invest', name: '투자 (합계)', series: calc.typeSeries['투자'] });
+    if (!calc.months.length) { box.innerHTML = emptyBox_('표시할 데이터가 없어요'); return; }
+    var sel = opts.filter(function (o) { return o.key === state.assetUI.account; })[0] || opts[0];
+    state.assetUI.account = sel.key;
+    var ms = calc.months.slice(-12);
+    var vals = ms.map(function (m) { return sel.series[m] || 0; });
+    var cur = vals[vals.length - 1], pv = vals.length > 1 ? vals[vals.length - 2] : null;
+    var six = vals.length > 6 ? cur - vals[vals.length - 7] : null;
+    box.innerHTML = '<div class="mini-filter-bar" style="margin-bottom:10px;"><select id="atAccount" aria-label="계좌">' +
+      opts.map(function (o) { return '<option value="' + esc_(o.key) + '"' + (o.key === sel.key ? ' selected' : '') + '>' + esc_(o.name) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="hw-row"><span class="hw-big">' + man_(cur) + '</span>' + (pv !== null ? '<span class="hw-delta ' + (cur - pv >= 0 ? 'up' : 'down') + '">전월 대비 ' + signed_(cur - pv, man_) + '</span>' : '') + '</div>' +
+      lineSvg_(ms.map(monthLabel_), vals, 'var(--accent)', man_) +
+      (six !== null ? '<div class="hw-note">최근 6개월 동안 ' + signed_(six, man_) + '</div>' : '') +
+      (sel.key === '__invest' ? '<div class="hw-foot">지난달까지는 월말 스냅샷, 이번 달은 현재가 기준이에요</div>' : '');
+    document.getElementById('atAccount').addEventListener('change', function (e) { state.assetUI.account = e.target.value; renderAccountTrend_(calc); });
+  }
+
+  function renderAssetTotalChart_(calc) {
+    var box = document.getElementById('assetTotalBox');
+    if (!box) return;
+    if (!calc.months.length) { box.innerHTML = emptyBox_('표시할 데이터가 없어요'); return; }
+    var ms = calc.months.slice(-8), latest = ms[ms.length - 1];
+    var series = ASSET_TYPES.map(function (t) {
+      return { name: t, color: ASSET_TYPE_COLORS[t], values: ms.map(function (m) { return calc.typeSeries[t][m] || 0; }) };
+    });
+    box.innerHTML = vbars_(ms.map(monthLabel_), series, { totals: ms.map(function (m) { return calc.totalSeries[m]; }) }) +
+      legend_(ASSET_TYPES.map(function (t) { return { name: t, color: ASSET_TYPE_COLORS[t], value: man_(calc.typeSeries[t][latest] || 0) }; })) +
+      '<div class="hw-foot">막대 위 숫자는 그 달 말 합계(보증금·부채 제외). 투자는 지난달까지 월말 스냅샷, 이번 달은 현재가 기준이에요.</div>';
+  }
+
+  function renderAssetTypeChart_(calc) {
+    var box = document.getElementById('assetTypeBox');
+    if (!box) return;
+    if (!calc.months.length) { box.innerHTML = emptyBox_('표시할 데이터가 없어요'); return; }
+    var ms = calc.months.slice(-8), latest = ms[ms.length - 1];
+    var vals = ms.map(function (m) { return calc.deltaTotalSeries[m] || 0; });
+    var byType = ASSET_TYPES.map(function (t) { return { t: t, v: calc.deltaTypeSeries[t][latest] || 0 }; }).filter(function (x) { return x.v; });
+    var maxAbs = Math.max.apply(null, byType.map(function (x) { return Math.abs(x.v); }).concat([1]));
+    box.innerHTML = dvbars_(ms.map(monthLabel_), vals) +
+      (byType.length ? '<div class="dt-sub">' + monthLabel_(latest) + ' 유형별 증감</div><div class="hw-diverge">' + byType.map(function (x) {
+        var w = Math.abs(x.v) / maxAbs * 50;
+        return '<div class="hw-dv-row"><span class="hw-dv-k">' + esc_(x.t) + '</span><div class="hw-dv-bar"><i class="hw-dv-mid"></i><i class="hw-dv-fill ' + (x.v > 0 ? 'good' : 'bad') + '" style="' + (x.v > 0 ? 'left:50%' : 'right:50%') + ';width:' + w + '%"></i></div><span class="hw-dv-v ' + (x.v > 0 ? 'good' : 'bad') + '">' + (x.v > 0 ? '+' : '') + short_(x.v) + '</span></div>';
+      }).join('') + '</div>' : '') +
+      '<div class="hw-foot">그 달에 늘어난(초록) 또는 줄어든(빨강) 금액이에요.</div>';
+  }
+
+  // =====================================================================
+  // 투자 탭: 계좌별 현황 · 월별 투자액(한도) · 실현손익 · 종목별 손익 · 비중
+  // =====================================================================
+  function renderTradeOverview_() {
+    var box = document.getElementById('tradeOverview');
+    if (!box) return;
+    var inv;
+    try { inv = homeInvestAccounts_(); } catch (e) { console.error(e); inv = { accounts: [] }; }
+    var accs = inv.accounts.filter(function (a) { return a.value > 0 || a.cost > 0; }).sort(function (a, b) { return b.value - a.value; });
+    var maxV = Math.max.apply(null, accs.map(function (a) { return a.value; }).concat([1]));
+    var totV = 0, totC = 0, totVc = 0;
+    var accHtml = accs.map(function (a) {
+      totV += a.value;
+      var note;
+      if (a.manual) note = '수동 기록 (' + esc_(a.month || '') + ') · 매입금액 기록 없음';
+      else {
+        totC += a.cost; totVc += a.value;
+        var pnl = a.value - a.cost, ret = a.cost ? pnl / a.cost : 0;
+        note = '매입 ' + man_(a.cost) + ' · 손익 <span class="' + (pnl > 0 ? 'stock-pos' : (pnl < 0 ? 'stock-neg' : '')) + '">' + signed_(pnl, man_) + ' (' + (pnl > 0 ? '+' : '') + pct1_(ret) + ')</span>';
+      }
+      return '<div class="dt-acc"><div class="hw-kv"><span style="color:var(--text);font-weight:600;">' + esc_(a.name) + '</span><b>' + man_(a.value) + '</b></div>' + bar_(a.value, maxV, 'var(--invest)', 8) + '<div class="hw-note">' + note + '</div></div>';
+    }).join('');
+    var totPnl = totVc - totC;
+    var card1 = '<div class="card dt-card"><h3>계좌별 현황</h3>' + (accs.length ?
+      '<div class="hw-row"><span class="hw-big">' + man_(totV) + '</span>' + (totC ? '<span class="' + (totPnl > 0 ? 'stock-pos' : (totPnl < 0 ? 'stock-neg' : '')) + '" style="font-size:13px;">' + signed_(totPnl, man_) + ' (' + (totPnl > 0 ? '+' : '') + pct1_(totPnl / totC) + ')</span>' : '') + '</div>' +
+      '<div class="dt-acc-list">' + accHtml + '</div><div class="hw-foot">현재가 × 보유수량 기준(예수금·IRP 펀드 제외). 빨강은 수익, 파랑은 손실이에요.</div>' : emptyBox_('투자 계좌 기록이 없어요')) + '</div>';
+
+    var months = (state.allMonths || []).slice().sort().slice(-8), byM = {};
+    (state.rows || []).map(parseRow).forEach(function (r) { if (r.type === '투자') byM[r.yearMonth] = (byM[r.yearMonth] || 0) + r.applied; });
+    var limit = HOME_CONFIG.investLimit || 1000000;
+    var vals = months.map(function (m) { return byM[m] || 0; });

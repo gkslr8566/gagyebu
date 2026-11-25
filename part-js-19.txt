@@ -1,0 +1,122 @@
+        return '<div class="hw-inv-c"><div class="hw-inv-n">' + esc_(short) + '</div><div class="hw-inv-v">' + man_(a.value) + '</div>' +
+          (r !== null ? '<div class="' + (r >= 0 ? 'stock-pos' : 'stock-neg') + '">' + (r >= 0 ? '+' : '') + pct1_(r) + '</div>' : '<div class="hw-foot">' + esc_(a.month || '') + ' 수동 기록</div>') + '</div>';
+      }).join('') + '</div><div class="hw-foot">보유수량 × 현재가 · 예수금·IRP 펀드 제외 · 수익률은 매입금액 대비</div>';
+    },
+    realized: function (ctx) {
+      var rb = ctx.invest.realizedByMonth;
+      var ms = Object.keys(rb).sort();
+      if (!ms.length) return '<div class="hw-empty">매도 기록이 없어요</div>';
+      var cum = 0, vals = ms.map(function (m) { cum += rb[m]; return cum; });
+      var last = rb[ms[ms.length - 1]];
+      return lineSvg_(ms.map(monthLabel_), vals, '#10b981', man_) +
+        '<div class="hw-kv"><span>' + monthLabel_(ms[ms.length - 1]) + ' 실현손익</span><b class="' + (last >= 0 ? 'stock-pos' : 'stock-neg') + '">' + signed_(last, man_) + '</b></div>';
+    },
+    car: function () {
+      var v = computeVehicleMonthlyData_();
+      var ms = v.months.filter(function (m) { return v.mileageMap[m] > 0; }).slice(-6);
+      if (!ms.length) return '<div class="hw-empty">주행거리 기록이 있는 달이 없어요</div>';
+      var vals = ms.map(function (m) { var b = v.byMonth[m] || {}; return (b.충전 || 0) / v.mileageMap[m]; });
+      var max = Math.max.apply(null, vals);
+      return ms.map(function (m, i) {
+        return '<div class="hw-kv"><span>' + monthLabel_(m) + ' · ' + Math.round(v.mileageMap[m]).toLocaleString('ko-KR') + 'km</span><b>' + Math.round(vals[i]) + '원/km</b></div>' + bar_(vals[i], max, '#a855f7', 8);
+      }).join('') + '<div class="hw-foot">충전비 ÷ 주행거리 (톨비 제외)</div>';
+    }
+  };
+
+  // ---------- 홈: 렌더 ----------
+  function homeDefaultMonth_(months) {
+    var d = new Date();
+    var cur = d.getFullYear() + '.' + ((d.getMonth() + 1) < 10 ? '0' : '') + (d.getMonth() + 1);
+    var prev = prevMonthOf(cur);
+    if (months.indexOf(prev) >= 0) return prev;
+    return months[months.length - 1] || null;
+  }
+
+  function renderHomeTab_() {
+    var boardEl = document.getElementById('homeBoard');
+    if (!boardEl) return;
+    var panel = document.getElementById('tabHome');
+    if (panel && panel.style.display === 'none') return; // 숨겨진 동안엔 그리지 않음(탭 열 때 다시 그림)
+    if (!state.home.board) state.home.board = normalizeBoard_(cacheGet_('cache_home_board'));
+
+    var months = Array.from(new Set((state.rows || []).map(function (r) { return normStr(r['연월']); }).filter(Boolean))).sort();
+    var sel = document.getElementById('homeMonth');
+    if (!state.home.month || months.indexOf(state.home.month) < 0) state.home.month = homeDefaultMonth_(months);
+    sel.innerHTML = months.slice().reverse().map(function (m) { return '<option value="' + m + '">' + m + '</option>'; }).join('');
+    if (state.home.month) sel.value = state.home.month;
+
+    var ctx = { month: state.home.month, months: months };
+    try { ctx.agg = homeMonthAgg_(ctx.month); } catch (e) { console.error(e); ctx.agg = { income: 0, expense: 0, saving: 0, invest: 0, groups: {}, mains: {}, pay: {}, days: {} }; }
+    try { ctx.asset = homeAssetCalc_(); } catch (e2) { console.error(e2); ctx.asset = null; }
+    try { ctx.invest = homeInvestAccounts_(); } catch (e3) { console.error(e3); ctx.invest = { accounts: [], realizedByMonth: {} }; }
+    document.getElementById('homeHint').textContent = '지출·저축은 선택한 달, 자산은 ' + ((ctx.asset && ctx.asset.latest) || '-') + ' 기준';
+
+    var b = state.home.board;
+    var titleOf = HOME_WIDGETS.reduce(function (o, w) { o[w.id] = w.title; return o; }, {});
+    var html = b.order.filter(function (id) { return !b.hidden[id]; }).map(function (id) {
+      var body;
+      try { body = (HOME_NEEDS_CONFIG[id] && !HOME_CONFIG.loaded) ? '<div class="hw-empty">시트에 연결되면 표시돼요</div>' : HOME_RENDER[id](ctx); } catch (err) { console.error('위젯 오류', id, err); body = '<div class="hw-empty">이 위젯을 그리지 못했어요</div>'; }
+      var go = HOME_LINK[id];
+      var head = go ? '<h3><button type="button" class="hw-link" data-go="' + go + '">' + esc_(titleOf[id]) + ' <span aria-hidden="true">›</span></button></h3>' : '<h3>' + esc_(titleOf[id]) + '</h3>';
+      return '<section class="hw-card ' + (b.size[id] === 'full' ? 'full' : 'half') + '">' + head + body + '</section>';
+    }).join('');
+    boardEl.innerHTML = html || '<div class="empty-state">보이는 위젯이 없어요. "보드 편집"에서 켜 주세요.</div>';
+
+    var range = document.getElementById('homeSimRange');
+    if (range) range.addEventListener('input', function () {
+      state.home.simMonthly = Number(this.value);
+      var A = ctx.asset, now = A && A.latest ? A.goalSeries[A.latest] : 0;
+      var remain = Math.max(0, HOME_CONFIG.goalTarget - now), mo = state.home.simMonthly;
+      var months2 = Math.ceil(remain / mo), d = new Date(); d.setMonth(d.getMonth() + months2);
+      document.getElementById('homeSimVal').textContent = man_(mo);
+      document.getElementById('homeSimOut').textContent = remain <= 0 ? '이미 달성' : (months2 + '개월');
+      document.getElementById('homeSimWhen').textContent = remain > 0 ? (d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월 도달 예상 · 남은 ' + man_(remain)) : '';
+    });
+    if (state.home.editing) renderHomeEditor_();
+  }
+
+  function renderHomeEditor_() {
+    var el = document.getElementById('homeEditor');
+    var b = state.home.board;
+    var titleOf = HOME_WIDGETS.reduce(function (o, w) { o[w.id] = w.title; return o; }, {});
+    el.innerHTML = '<div class="toolbar"><h3 style="margin:0">보드 편집</h3><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button type="button" class="btn-secondary" id="homeResetBtn">기본값</button>' +
+      '<button type="button" class="btn-primary" id="homeSaveBtn">저장</button></div></div>' +
+      '<div class="hint">켜기/끄기, ↑↓로 순서, 반/전체로 크기를 바꿔요. 저장하면 다른 기기에도 같은 보드가 보여요.</div>' +
+      '<div class="he-list">' + b.order.map(function (id, i) {
+        return '<div class="he-row' + (b.hidden[id] ? ' off' : '') + '">' +
+          '<label class="he-name"><input type="checkbox" data-he="toggle" data-id="' + id + '"' + (b.hidden[id] ? '' : ' checked') + '> ' + esc_(titleOf[id]) + '</label>' +
+          '<div class="he-ctrl"><div class="segmented"><button type="button" class="seg-btn' + (b.size[id] !== 'full' ? ' active' : '') + '" data-he="half" data-id="' + id + '">반</button><button type="button" class="seg-btn' + (b.size[id] === 'full' ? ' active' : '') + '" data-he="full" data-id="' + id + '">전체</button></div>' +
+          '<button type="button" class="btn-secondary he-mv" data-he="up" data-id="' + id + '"' + (i === 0 ? ' disabled' : '') + ' aria-label="위로">↑</button>' +
+          '<button type="button" class="btn-secondary he-mv" data-he="down" data-id="' + id + '"' + (i === b.order.length - 1 ? ' disabled' : '') + ' aria-label="아래로">↓</button></div></div>';
+      }).join('') + '</div><div class="status-text" id="homeSaveStatus"></div>';
+  }
+
+  var HOME_LINK = { goal: 'assets', networth: 'assets', nwcompose: 'assets', nwtrend: 'assets', accounts: 'assets', sim: 'assets',
+    spend: 'ledger', rate: 'ledger', flowbar: 'ledger', leftover: 'ledger', catdelta: 'ledger', sankey: 'ledger', card: 'ledger', heat: 'ledger',
+    invcards: 'trades', realized: 'trades', car: 'vehicle' };
+  function goTab_(tab) {
+    if (tab === 'ledger' && state.home.month) {
+      // 홈에서 보던 달로 가계부 목록을 걸러서 연다
+      state.filteredMonth = state.home.month;
+      var ms = document.getElementById('monthFilter');
+      if (ms) ms.value = state.home.month;
+    }
+    var btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+    if (btn) btn.click();
+    window.scrollTo(0, 0);
+  }
+
+  function bindHomeEvents_() {
+    document.getElementById('homeBoard').addEventListener('click', function (e) {
+      var t = e.target.closest('[data-go]');
+      if (t) goTab_(t.getAttribute('data-go'));
+    });
+    var chartsBox = document.getElementById('ledgerChartsBox');
+    if (chartsBox) chartsBox.addEventListener('toggle', function () { if (chartsBox.open) render(); });
+    document.getElementById('homeMonth').addEventListener('change', function (e) { state.home.month = e.target.value; renderHomeTab_(); });
+    document.getElementById('homeEditBtn').addEventListener('click', function () {
+      state.home.editing = !state.home.editing;
+      var el = document.getElementById('homeEditor');
+      el.style.display = state.home.editing ? '' : 'none';
+      this.textContent = state.home.editing ? '편집 닫기' : '보드 편집';

@@ -1,0 +1,119 @@
+    var overCnt = vals.filter(function (v) { return v > limit; }).length;
+    var card2 = '<div class="card dt-card"><h3>월별 투자액</h3>' + (months.length ?
+      vbars_(months.map(monthLabel_), [{ name: '투자', color: 'var(--invest)', values: vals }], { limit: limit, overColor: 'var(--expense)' }) +
+      '<div class="hw-note ' + (overCnt ? 'hw-warn' : '') + '">점선은 한도 ' + man_(limit) + ' · 최근 ' + months.length + '개월 중 넘은 달 ' + overCnt + '번</div>' +
+      '<div class="hw-foot">가계부에 "투자"로 기록한 금액 기준 · 규칙: 남은 돈 안에서 월 최대 ' + man_(limit) + '</div>' : emptyBox_('기록이 없어요')) + '</div>';
+    box.innerHTML = '<div class="grid-2 dt-grid">' + card1 + card2 + '</div>';
+  }
+
+  function renderTradePnlChart_(accountRows, totalInvested) {
+    var box = document.getElementById('tradePnlBox');
+    var noDataEl = document.getElementById('tradePnlNoDataEmpty');
+    if (!box) return;
+    var buckets = {};
+    accountRows.forEach(function (r) {
+      if (r.action !== '매도') return;
+      var key = bucketKeyForDate_(r.date, 'month');
+      if (!key) return;
+      buckets[key] = (buckets[key] || 0) + (r.realizedPnl || 0);
+    });
+    var keys = Object.keys(buckets).sort();
+    if (!keys.length) { box.innerHTML = ''; if (noDataEl) noDataEl.style.display = 'block'; return; }
+    if (noDataEl) noDataEl.style.display = 'none';
+    var total = keys.reduce(function (s, k) { return s + buckets[k]; }, 0);
+    var show = keys.slice(-8);
+    box.innerHTML = '<div class="hw-row"><span class="hw-big ' + (total > 0 ? 'stock-pos' : (total < 0 ? 'stock-neg' : '')) + '">' + signed_(total, man_) + '</span><span class="hw-note">누적 (매도 ' + accountRows.filter(function (r) { return r.action === '매도'; }).length + '건)</span></div>' +
+      dvbars_(show.map(function (k) { return parseInt(k.slice(5, 7), 10) + '월'; }), show.map(function (k) { return buckets[k]; }), { pos: 'var(--expense)', neg: 'var(--income)', h: 160 }) +
+      '<div class="hw-foot">매도해서 확정된 손익을 월별로 묶었어요' + (keys.length > 8 ? ' (최근 8개 달)' : '') + '. 빨강은 수익, 파랑은 손실.</div>';
+  }
+
+  function renderTradePnlByStockChart_(accountRows) {
+    var box = document.getElementById('tradePnlByStockBox');
+    var emptyEl = document.getElementById('tradePnlByStockEmpty');
+    if (!box) return;
+    var byName = {};
+    accountRows.forEach(function (r) { if (r.action === '매도') byName[r.name] = (byName[r.name] || 0) + (r.realizedPnl || 0); });
+    var names = Object.keys(byName).sort(function (a, b) { return byName[b] - byName[a]; });
+    if (!names.length) { box.innerHTML = ''; if (emptyEl) emptyEl.style.display = 'block'; return; }
+    if (emptyEl) emptyEl.style.display = 'none';
+    var maxAbs = Math.max.apply(null, names.map(function (n) { return Math.abs(byName[n]); }).concat([1]));
+    box.innerHTML = '<div class="hw-diverge dt-wide">' + names.map(function (n) {
+      var v = byName[n], w = Math.abs(v) / maxAbs * 50;
+      return '<div class="hw-dv-row"><span class="hw-dv-k" title="' + esc_(n) + '">' + esc_(n) + '</span><div class="hw-dv-bar"><i class="hw-dv-mid"></i><i class="hw-dv-fill ' + (v >= 0 ? 'pos' : 'neg') + '" style="' + (v >= 0 ? 'left:50%' : 'right:50%') + ';width:' + w + '%"></i></div><span class="hw-dv-v ' + (v >= 0 ? 'pos' : 'neg') + '">' + (v > 0 ? '+' : '') + short_(v) + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  function renderTradeAllocationChart_(holdingsRendered) {
+    var box = document.getElementById('tradeAllocationBox');
+    var emptyEl = document.getElementById('tradeAllocationEmpty');
+    if (!box) return;
+    if (!holdingsRendered.length) { box.innerHTML = ''; if (emptyEl) emptyEl.style.display = 'block'; return; }
+    if (emptyEl) emptyEl.style.display = 'none';
+    var mode = state.tradeUI.allocationMode, byGroup = {};
+    holdingsRendered.forEach(function (h) { var k = mode === 'sector' ? h.sector : h.name; byGroup[k] = (byGroup[k] || 0) + h.valuation; });
+    var labels = Object.keys(byGroup).sort(function (a, b) { return byGroup[b] - byGroup[a]; });
+    var total = labels.reduce(function (s, l) { return s + byGroup[l]; }, 0) || 1;
+    box.innerHTML = '<div class="hw-stack" style="height:26px;">' + labels.map(function (l, i) {
+      return '<div style="width:' + (byGroup[l] / total * 100) + '%;background:' + PALETTE[i % PALETTE.length] + '" title="' + esc_(l) + ' ' + man_(byGroup[l]) + '"></div>';
+    }).join('') + '</div><div class="dt-rank">' + labels.map(function (l, i) {
+      return '<div class="dt-rank-row"><i style="background:' + PALETTE[i % PALETTE.length] + '"></i><span class="dt-rank-n">' + esc_(l) + '</span><span class="dt-rank-p">' + pct1_(byGroup[l] / total) + '</span><span class="dt-rank-v">' + man_(byGroup[l]) + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  // =====================================================================
+  // 차량 탭: 월별 유지비(항목별 누적) · km당 충전비
+  // =====================================================================
+  function renderVehicleTotalChart_(calc) {
+    var box = document.getElementById('vehicleTotalBox');
+    if (!box) return;
+    if (!calc.months.length) { box.innerHTML = emptyBox_('표시할 데이터가 없어요'); return; }
+    var ms = calc.months.slice(-8);
+    var groups = [
+      { name: '충전', color: '#10b981', cats: ['충전'] },
+      { name: '톨비', color: '#3b82f6', cats: ['톨비'] },
+      { name: '보험', color: '#a855f7', cats: ['보험'] },
+      { name: '그 외', color: '#cbd5e1', cats: ['세차', '소모품', '수리', '주차', '기타'] }
+    ];
+    var series = groups.map(function (g) {
+      return { name: g.name, color: g.color, values: ms.map(function (m) { var b = calc.byMonth[m] || {}; return g.cats.reduce(function (s, c) { return s + (b[c] || 0); }, 0); }) };
+    });
+    var avg = ms.reduce(function (s, m) { return s + (calc.totalSeries[m] || 0); }, 0) / ms.length;
+    box.innerHTML = vbars_(ms.map(monthLabel_), series) + legend_(groups.map(function (g) { return { name: g.name, color: g.color }; })) +
+      '<div class="hw-note">최근 ' + ms.length + '개월 평균 ' + man_(avg) + '</div>';
+  }
+
+  function renderVehicleCostPerKmChart_(calc) {
+    var box = document.getElementById('vehicleCostPerKmBox');
+    if (!box) return;
+    var ms = calc.months.filter(function (m) { return calc.costPerKmSeries[m] !== null; }).slice(-12);
+    if (!ms.length) { box.innerHTML = emptyBox_('표시할 데이터가 없어요. 주행거리를 입력해보세요.'); return; }
+    var vals = ms.map(function (m) { return Math.round(calc.costPerKmSeries[m] * 10) / 10; });
+    var avg = vals.reduce(function (s, v) { return s + v; }, 0) / vals.length;
+    function f(v) { return v.toLocaleString('ko-KR') + '원/km'; }
+    box.innerHTML = (ms.length < 2 ? '<div class="hw-big">' + f(vals[0]) + '</div><div class="hw-note">' + esc_(ms[0]) + ' · 두 달 이상 쌓이면 추이가 그려져요</div>' :
+      lineSvg_(ms.map(monthLabel_), vals, 'var(--saving)', f) + '<div class="hw-note">평균 ' + f(Math.round(avg * 10) / 10) + ' · 충전비 ÷ 주행거리 (톨비 제외)</div>');
+  }
+
+  // ---------- 홈: 위젯 ----------
+  var HOME_RENDER = {
+    goal: function (ctx) {
+      var A = ctx.asset;
+      var now = A.latest ? A.goalSeries[A.latest] : 0;
+      var prev = A.latest ? A.goalSeries[prevMonthOf(A.latest)] : undefined;
+      var ratio = now / HOME_CONFIG.goalTarget;
+      var remain = HOME_CONFIG.goalTarget - now;
+      var eta = (A.speed && A.speed > 0 && remain > 0) ? Math.ceil(remain / A.speed) : null;
+      return '<div class="hw-big">' + man_(now) + '</div>' +
+        '<div class="hw-row"><span class="hw-pct">' + pct1_(ratio) + '</span>' + (prev !== undefined ? '<span class="hw-delta ' + (now - prev >= 0 ? 'up' : 'down') + '">전월 대비 ' + signed_(now - prev, man_) + '</span>' : '') + '</div>' +
+        bar_(now, HOME_CONFIG.goalTarget, 'var(--accent)', 12) +
+        '<div class="hw-note">' + (remain > 0 ? ('남은 금액 ' + man_(remain) + (eta ? ' · 최근 속도면 약 ' + eta + '개월' : '')) : '목표 달성!') + '</div>' +
+        '<div class="hw-foot">CMA·적금·청약 − 부모님 차입금</div>';
+    },
+    networth: function (ctx) {
+      var A = ctx.asset;
+      var now = A.latest ? A.nwSeries[A.latest] : 0;
+      var prevM = A.latest ? prevMonthOf(A.latest) : null;
+      var prev = prevM && A.nwMonths.indexOf(prevM) >= 0 ? A.nwSeries[prevM] : undefined;
+      var assets = HOME_CONFIG.deposit + (A.latest ? A.savingsAllSeries[A.latest] : 0) + A.investNow;
+      return '<div class="hw-big">' + man_(now) + '</div>' +
+        (prev !== undefined ? '<div class="hw-row"><span class="hw-delta ' + (now - prev >= 0 ? 'up' : 'down') + '">전월 대비 ' + signed_(now - prev, man_) + '</span></div>' : '') +

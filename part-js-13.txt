@@ -1,0 +1,145 @@
+    (state.assets.snapshots || []).forEach(function (s) {
+      var acc = normStr(s['계좌명']), m = normStr(s['연월']);
+      if (!acc || byAcc[acc]) return;
+      if (!lastManual[acc] || m > lastManual[acc].month) lastManual[acc] = { month: m, value: parseAmount(s['금액']) };
+    });
+    Object.keys(lastManual).forEach(function (acc) {
+      byAcc[acc] = { name: acc, value: lastManual[acc].value, cost: 0, manual: true, month: lastManual[acc].month };
+    });
+    var realizedByMonth = {};
+    tc.rows.forEach(function (r) {
+      if (r.action !== '매도') return;
+      var ym = r.date ? String(r.date).slice(0, 7).replace('-', '.') : r.yearMonth;
+      realizedByMonth[ym] = (realizedByMonth[ym] || 0) + (r.realizedPnl || 0);
+    });
+    return { accounts: Object.keys(byAcc).sort().map(function (k) { return byAcc[k]; }), realizedByMonth: realizedByMonth };
+  }
+
+  // ---------- 홈: 작은 그림 도구 ----------
+  function bar_(value, max, color, h) {
+    var w = max > 0 ? Math.max(0, Math.min(100, value / max * 100)) : 0;
+    return '<div class="hw-track" style="height:' + (h || 10) + 'px"><div class="hw-fill" style="width:' + w + '%;background:' + color + '"></div></div>';
+  }
+  function lineSvg_(labels, values, color, fmtLast) {
+    var W = 320, H = 130, L = 8, R = 8, T = 14, B = 22;
+    var pts = values.map(function (v, i) { return { i: i, v: v }; }).filter(function (p) { return p.v !== null && p.v !== undefined; });
+    if (pts.length < 2) return '<div class="hw-empty">데이터가 2개월 이상 쌓이면 그려져요</div>';
+    var min = Math.min.apply(null, pts.map(function (p) { return p.v; }));
+    var max = Math.max.apply(null, pts.map(function (p) { return p.v; }));
+    if (max === min) { max += 1; min -= 1; }
+    var pad = (max - min) * 0.12; min -= pad; max += pad;
+    var n = values.length;
+    function x(i) { return L + (W - L - R) * (n === 1 ? 0.5 : i / (n - 1)); }
+    function y(v) { return T + (H - T - B) * (1 - (v - min) / (max - min)); }
+    var d = pts.map(function (p, k) { return (k ? 'L' : 'M') + x(p.i).toFixed(1) + ' ' + y(p.v).toFixed(1); }).join(' ');
+    var area = d + ' L' + x(pts[pts.length - 1].i).toFixed(1) + ' ' + (H - B) + ' L' + x(pts[0].i).toFixed(1) + ' ' + (H - B) + ' Z';
+    var last = pts[pts.length - 1];
+    var grid = [0.25, 0.5, 0.75].map(function (f) { var yy = T + (H - T - B) * f; return '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '" stroke="var(--border)" stroke-width="1"/>'; }).join('');
+    var lbls = labels.map(function (lb, i) {
+      if (n > 8 && i % 2 && i !== n - 1) return '';
+      return '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="10" text-anchor="middle" fill="var(--muted)">' + esc_(lb) + '</text>';
+    }).join('');
+    var lx = x(last.i), anchor = lx > W - 60 ? 'end' : 'middle';
+    return '<svg class="hw-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + grid +
+      '<path d="' + area + '" fill="' + color + '" opacity="0.12"/>' +
+      '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2.5" stroke-linejoin="round"/>' +
+      '<circle cx="' + lx + '" cy="' + y(last.v) + '" r="4" fill="' + color + '"/>' +
+      '<text x="' + lx + '" y="' + (y(last.v) - 8) + '" font-size="11" font-weight="700" text-anchor="' + anchor + '" fill="var(--text)">' + esc_(fmtLast(last.v)) + '</text>' +
+      lbls + '</svg>';
+  }
+  function monthLabel_(ym) { var p = String(ym).split('.'); return p.length > 1 ? (parseInt(p[1], 10) + '월') : ym; }
+  function lastMonths_(months, ym, n) {
+    var idx = months.indexOf(ym);
+    if (idx < 0) return [];
+    return months.slice(Math.max(0, idx - n), idx);
+  }
+
+  // 지출 관리용 세 묶음: 고정비 / 필수 변동비 / 비고정비
+  var SPEND_FIXED = ['오피스텔', '대출', '보험', '휴대폰', '구독료', '용돈'];
+  var SPEND_NEED = ['생활비', '차량관리비', '교통', '의료', '미용'];
+  function homeBucketOf_(r) {
+    var m = r.main, s = r.sub || '';
+    if (!r.type || !m) return 'flex';
+    if (m === '보험' && s.indexOf('자동차') >= 0) return 'flex';
+    if (m === '차량관리비' && s.indexOf('자동차세') >= 0) return 'flex';
+    if (SPEND_FIXED.indexOf(m) >= 0) return 'fixed';
+    if (SPEND_NEED.indexOf(m) >= 0) return 'need';
+    return 'flex';
+  }
+  function homeSpendByMonth_(months) {
+    var out = {};
+    months.forEach(function (m) { out[m] = { fixed: 0, need: 0, flex: 0, items: [] }; });
+    (state.rows || []).map(parseRow).forEach(function (r) {
+      var o = out[r.yearMonth];
+      if (!o) return;
+      if (r.type && r.type !== '지출') return;
+      var b = homeBucketOf_(r);
+      o[b] += r.applied;
+      if (b === 'flex' && r.applied > 0) o.items.push({ memo: r.memo || r.sub || r.main || '미분류', amt: r.applied });
+    });
+    return out;
+  }
+
+
+  // =====================================================================
+  // 상세 탭(가계부·자산·투자·차량) 공용 그림 도구 — 홈 보드와 같은 SVG/막대 스타일
+  // =====================================================================
+  function short_(n) {
+    var num = Number(n) || 0, a = Math.abs(num), s;
+    if (a >= 1e8) s = (Math.round(a / 1e7) / 10) + '억';
+    else if (a >= 1e4) s = Math.round(a / 1e4).toLocaleString('ko-KR') + '만';
+    else s = Math.round(a).toLocaleString('ko-KR');
+    return (num < 0 ? '-' : '') + s;
+  }
+  function emptyBox_(msg) { return '<div class="hw-empty">' + esc_(msg) + '</div>'; }
+  function setBox_(id, html) { var el = document.getElementById(id); if (el) el.innerHTML = html; return el; }
+  function legend_(items) {
+    return '<div class="hw-legend">' + items.map(function (it) {
+      return '<span><i style="background:' + it.color + '"></i>' + esc_(it.name) + (it.value !== undefined ? ' <b>' + esc_(it.value) + '</b>' : '') + '</span>';
+    }).join('') + '</div>';
+  }
+
+  // 세로 누적 막대. series: [{name,color,values[]}], opts: {limit, limitLabel, overColor, totals[], fmt}
+  function vbars_(labels, series, opts) {
+    opts = opts || {};
+    var n = labels.length;
+    if (!n) return emptyBox_('표시할 데이터가 없어요');
+    var fmt = opts.fmt || short_;
+    var W = 340, H = opts.h || 176, L = 6, R = 6, T = 22, B = 22;
+    var stackTotals = labels.map(function (_, i) {
+      return series.reduce(function (s, se) { return s + Math.max(0, Number(se.values[i]) || 0); }, 0);
+    });
+    var max = Math.max.apply(null, stackTotals.concat([opts.limit || 0, 1]));
+    var slot = (W - L - R) / n, bw = Math.min(34, slot * 0.62);
+    function y(v) { return T + (H - T - B) * (1 - v / max); }
+    var out = '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + (H - B) + '" y2="' + (H - B) + '" stroke="var(--border)" stroke-width="1"/>';
+    labels.forEach(function (lb, i) {
+      var cx = L + slot * i + slot / 2, x0 = cx - bw / 2, acc = 0;
+      var over = opts.limit && stackTotals[i] > opts.limit;
+      var live = series.filter(function (se) { return (Number(se.values[i]) || 0) > 0; });
+      live.forEach(function (se, k) {
+        var v = Number(se.values[i]) || 0;
+        var top = y(acc + v), h = Math.max(1, y(acc) - top - (k < live.length - 1 ? 1 : 0));
+        var color = (over && opts.overColor && series.length === 1) ? opts.overColor : se.color;
+        out += '<rect x="' + x0.toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="' + (k === live.length - 1 ? 4 : 1) + '" fill="' + color + '"><title>' + esc_(lb + ' ' + se.name + ' ' + man_(v)) + '</title></rect>';
+        acc += v;
+      });
+      var shown = opts.totals ? opts.totals[i] : stackTotals[i];
+      if (shown) out += '<text x="' + cx.toFixed(1) + '" y="' + (y(stackTotals[i]) - 5).toFixed(1) + '" font-size="9.5" font-weight="700" text-anchor="middle" fill="' + (over && opts.overColor ? opts.overColor : 'var(--text)') + '">' + esc_(fmt(shown)) + '</text>';
+      out += '<text x="' + cx.toFixed(1) + '" y="' + (H - 7) + '" font-size="10" text-anchor="middle" fill="var(--muted)">' + esc_(lb) + '</text>';
+    });
+    if (opts.limit) {
+      var ly = y(opts.limit);
+      out += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + ly.toFixed(1) + '" y2="' + ly.toFixed(1) + '" stroke="var(--text)" stroke-width="1.2" stroke-dasharray="4 3"/>';
+      if (opts.limitLabel) out += '<text x="' + (W - R) + '" y="' + (ly - 4).toFixed(1) + '" font-size="9" text-anchor="end" fill="var(--muted)">' + esc_(opts.limitLabel) + '</text>';
+    }
+    return '<svg class="hw-svg dt-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img">' + out + '</svg>';
+  }
+
+  // 0을 기준으로 위아래로 뻗는 막대(증감·손익). opts: {pos, neg, fmt}
+  function dvbars_(labels, values, opts) {
+    opts = opts || {};
+    var n = labels.length;
+    if (!n) return emptyBox_('표시할 데이터가 없어요');
+    var fmt = opts.fmt || short_;
+    var pos = opts.pos || 'var(--saving)', neg = opts.neg || 'var(--expense)';
